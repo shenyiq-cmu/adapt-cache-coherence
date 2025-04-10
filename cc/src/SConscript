@@ -1,0 +1,10 @@
+Import('*')
+
+DebugFlag('CCache')
+DebugFlag('SBus')
+SimObject('CoherentCache.py', sim_objects=['CoherentCacheBase', 'SerializingBus', 'MiCache', 'MsiCache', 'MesiCache'])
+Source('coherent_cache_base.cc')
+Source('serializing_bus.cc')
+Source('mi_cache.cc')
+Source('msi_cache.cc')
+Source('mesi_cache.cc')

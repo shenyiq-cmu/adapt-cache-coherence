@@ -1,0 +1,21 @@
+*
+!*/
+
+# track only Lab 3 student source files
+!.gitignore
+!BaseLLC.h
+!SimpleLLC.h
+!SimpleLLC.cpp
+!WaypartLLC.h
+!WaypartLLC.cpp
+!CustomLLC.h
+!CustomLLC.cpp
+!StatusReport.h
+!StatusReport.cpp
+!Cache.h
+!Cache.cpp
+!Controller.h
+!Scheduler.h
+!cc/src/*
+!cc/binaries/*
+!cc/configs/*
