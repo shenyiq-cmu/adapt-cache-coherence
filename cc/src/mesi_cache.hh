@@ -8,6 +8,8 @@
 #include "src_740/serializing_bus.hh"
 
 #include <list>
+#include <vector>
+#include <unordered_map>
 
 namespace gem5 {
 
@@ -24,6 +26,22 @@ class MesiCache : public CoherentCacheBase {
         Error
     } state = MesiState::Invalid;
 
+    typedef struct CacheLine{
+        std::vector<uint8_t> cacheBlock;
+        MesiState cohState;
+        bool dirty;
+        bool clkFlag;
+        // for replacement, more like existence, should be the same
+        // as found in tagMap
+        bool valid; 
+    } cacheLine;
+
+    typedef struct CacheSetMgr{
+        std::vector<CacheLine> cacheSet;
+        std::unordered_map<uint64_t, int> tagMap;
+        int clkPtr;
+    } cacheSetMgr;
+
     // single entry cache = all bits are used for tag
     unsigned char data = 0;
     long tag = 0;
@@ -33,10 +51,24 @@ class MesiCache : public CoherentCacheBase {
 
     bool share[4096];
 
-    bool isHit(long addr);
-    void allocate(long addr);
-    void evict();
-    void writeback();
+    int blockOffset = 5;
+    int blockSize = 32;
+
+    int setBit = 4;
+    int numSets = 16;
+
+    int cacheSizeBit = 15;
+    int cacheSize = 32 * 1024;
+    int numLines;
+
+    std::vector<cacheSetMgr> MesiCacheMgr;
+
+    uint64_t getTag(long addr);
+    uint64_t getSet(long addr);
+    bool isHit(long addr, int &lineID);
+    void allocate(long addr, MesiState state, const uint8_t *data);
+    void evict(long addr);
+    void writeback(long addr, uint8_t* data);
     
     void handleCoherentCpuReq(PacketPtr pkt) override;
     void handleCoherentBusGrant() override;

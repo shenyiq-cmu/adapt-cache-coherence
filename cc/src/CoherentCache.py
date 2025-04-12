@@ -37,3 +37,7 @@ class MesiCache(CoherentCacheBase):
     type = 'MesiCache'
     cxx_header = 'src_740/mesi_cache.hh'
     cxx_class = 'gem5::MesiCache'
+
+    blockOffset = Param.Int(5, 'number of bits for blockOffset')
+    setBit = Param.Int(4, 'number of bits for cache set')
+    cacheSizeBit = Param.Int(15, 'number of bits for cache size')

@@ -145,4 +145,16 @@ void SerializingBus::sendWriteback(int cacheId, long addr, unsigned char data) {
     memPort.sendFunctional(new_pkt);
 }
 
+// need a data block version
+
+void SerializingBus::sendBlkWriteback(int cacheId, long addr, uint8_t *data, int blockSize) {
+    DPRINTF(SBus, "sending writeback from %d @ %#x\n\n", cacheId, addr);
+    RequestPtr req = std::make_shared<Request>(addr, blockSize, 0, 0);
+    PacketPtr new_pkt = new Packet(req, MemCmd::WriteReq, blockSize);
+    unsigned char* dataBlock = new uint8_t[blockSize];
+    memcpy(dataBlock, data, blockSize);
+    new_pkt->dataDynamic(dataBlock);
+    memPort.sendFunctional(new_pkt);
+}
+
 }

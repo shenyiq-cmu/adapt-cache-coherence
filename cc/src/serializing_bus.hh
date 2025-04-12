@@ -60,5 +60,6 @@ class SerializingBus : public SimObject {
     void request(int cacheId);
     void release(int cacheId);
     void sendWriteback(int cacheId, long addr, unsigned char data);
+    void sendBlkWriteback(int cacheId, long addr, uint8_t *data, int blockSize);
 };
 }

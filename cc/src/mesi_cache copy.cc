@@ -1,141 +1,44 @@
 #include "src_740/mesi_cache.hh"
 #include "base/trace.hh"
 #include "debug/CCache.hh"
-#include <vector>
 #define CACHE_START 0x8000
-#define NOT_EXIST -1
-
-// cache coherence protocol and cache replacement protocol orthogonol
-// a cache line can still exist in the cache, but invalidated
 
 namespace gem5 {
 
 MesiCache::MesiCache(const MesiCacheParams& params) 
-: CoherentCacheBase(params),
-  blockOffset(params.blockOffset),
-  setBit(params.setBit),
-  cacheSizeBit(params.cacheSizeBit) {
-    // for(int i = 0; i < 4096; i++){
-    //     share[i] = 0;
-    // }
-    DPRINTF(CCache, "blockoffset: %d, setbit: %d, cachsizebit: %d\n\n", blockOffset, setBit, cacheSizeBit);
-    // set up cache data structure
-    blockSize = 0x1 << blockOffset;
-    numSets = 0x1 << setBit;
-    cacheSize = 0x1 << cacheSizeBit;
-    numLines =  cacheSize / numSets / blockSize;
-
-    // init cache manager
-    MesiCacheMgr.resize(numSets);
-    
-    // init cache set manager
-    for(auto &setMgr : MesiCacheMgr){
-        setMgr.clkPtr = 0;
-        setMgr.cacheSet.resize(numLines);
-        // init cache lines
-        for(auto &cacheline : setMgr.cacheSet){
-            cacheline.clkFlag = 0;
-            cacheline.dirty = 0;
-            cacheline.valid = false;
-            cacheline.cohState = MesiState::Invalid;
-            cacheline.cacheBlock.resize(blockSize);
-        }
+: CoherentCacheBase(params) {
+    for(int i = 0; i < 4096; i++){
+        share[i] = 0;
     }
-
-    
 }
 
-uint64_t MesiCache::getTag(long addr){
-    return ((uint64_t)addr >> ((blockOffset + setBit)));
-}
-
-uint64_t MesiCache::getSet(long addr){
-    uint64_t mask = (0x1 << (blockOffset + setBit)) - 1;
-    return ((uint64_t)addr & mask) >> blockOffset;
-}
-
-bool MesiCache::isHit(long addr, int &lineID) {
+bool MesiCache::isHit(long addr) {
     // hit if tag matches and state is modified or shared
-    uint64_t setID = getSet(addr);
-    uint64_t tag = getTag(addr);
-    bool exist = false;
-
-    if(MesiCacheMgr[setID].tagMap.find(tag) != MesiCacheMgr[setID].tagMap.end()){
-        exist = true;
-        lineID = MesiCacheMgr[setID].tagMap[tag];
-    }
-
-    return (exist && (MesiCacheMgr[setID].cacheSet[lineID].cohState != MesiState::Invalid));
+    return state != MesiState::Invalid && tag == addr;
 }
 
-void MesiCache::allocate(long addr, MesiState state, const uint8_t *data) {
-    // assume clk_ptr now points to a empty line
-    uint64_t setID = getSet(addr);
-    uint64_t tag = getTag(addr);
-    cacheSetMgr &setMgr = MesiCacheMgr[setID];
-
-    assert(setMgr.cacheSet[setMgr.clkPtr].valid == false);
-
-    cacheLine &cline = setMgr.cacheSet[setMgr.clkPtr];
-    cline.dirty = false;
-    cline.clkFlag = 1;
-    cline.cohState = state;
-    cline.valid = true;
-    memcpy(&cline.cacheBlock[0], data, blockSize);
-
-    // update clk pointer of the circular array
-    setMgr.tagMap[tag] = setMgr.clkPtr;
-
-    setMgr.clkPtr = (setMgr.clkPtr + 1) % numLines;
-
+void MesiCache::allocate(long addr) {
+    tag = addr;
+    dirty = false;
 }
 
-void MesiCache::evict(long addr) {
-
-    uint64_t setID = getSet(addr);
-    uint64_t tag = getTag(addr);
-    cacheSetMgr &setMgr = MesiCacheMgr[setID];
-
-    if(setMgr.tagMap.size() < numLines){
-        // still have unallocated lines
-        return;
+void MesiCache::evict() {
+    // write back only when modified
+    if ((state == MesiState::Modified) && dirty) {
+        state = MesiState::Invalid;
+        writeback();     
     }
-
-    while(1){
-        if(setMgr.cacheSet[setMgr.clkPtr].clkFlag == 1){
-            setMgr.cacheSet[setMgr.clkPtr].clkFlag = 0;
-        }
-        else{
-            // evict block
-            cacheLine &cline = setMgr.cacheSet[setMgr.clkPtr];
-            // write back if dirty
-            if(cline.dirty){
-                assert(cline.cohState == MesiState::Modified);
-                writeback(addr, &cline.cacheBlock[0]);
-            }
-
-            cline.valid = false;
-            // other fields reset by allocate
-
-            break;
-        }
-
-        setMgr.clkPtr = (setMgr.clkPtr+1)%numLines;
+    else if(state == MesiState::Shared || state == MesiState::Exclusive){
+        state = MesiState::Invalid;
     }
-
-    // // write back only when modified
-    // if ((state == MesiState::Modified) && dirty) {
-    //     state = MesiState::Invalid;
-    //     writeback();     
-    // }
-    // else if(state == MesiState::Shared || state == MesiState::Exclusive){
-    //     state = MesiState::Invalid;
-    // }
 }
 
-void MesiCache::writeback(long addr, uint8_t* data){
-    DPRINTF(CCache, "Mesi[%d] writeback %#x, %d\n\n", cacheId, addr, data[0]);
-    bus->sendBlkWriteback(cacheId, addr, data, blockSize);        
+void MesiCache::writeback(){
+    if ((state == MesiState::Modified) && dirty) {
+        dirty = false;
+        DPRINTF(CCache, "Msi[%d] writeback %#x, %d\n\n", cacheId, tag, data);
+        bus->sendWriteback(cacheId, tag, data);        
+    }
 }
 
 
