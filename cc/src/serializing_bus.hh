@@ -7,6 +7,7 @@
 #include <list>
 #include <map>
 #include <unordered_set>
+#include <tuple>  // Added for std::tuple
 
 namespace gem5 {
 
@@ -38,8 +39,8 @@ class SerializingBus : public SimObject {
     // Map from cache ID to cache object
     std::map<int, CoherentCacheBase*> cacheMap;
 
-    // List of pending memory requests
-    std::list<std::pair<PacketPtr, bool>> memReqQueue;
+    // List of pending memory requests (packet, sendToMemory, originator)
+    std::list<std::tuple<PacketPtr, bool, int>> memReqQueue;
 
     // List of caches waiting for bus
     std::list<int> busRequestQueue;
@@ -81,6 +82,9 @@ class SerializingBus : public SimObject {
 
     // write back
     void sendWriteback(int cacheId, long addr, unsigned char data);
+    
+    // block write back
+    void sendBlkWriteback(int cacheId, long addr, uint8_t *data, int blockSize);
 
     // Methods for shared state tracking
     bool hasShared(Addr addr) const { return sharedAddresses.find(addr) != sharedAddresses.end(); }

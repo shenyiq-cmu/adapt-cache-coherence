@@ -19,13 +19,14 @@ void SerializingBus::processMemReqEvent() {
         auto bundle = *first;
         memReqQueue.erase(first);
 
-        // Store the originator ID before processing the request
-        // This is important because currentGranted might change during processing
-        int originator = currentGranted;
+        // Unpack the tuple - now with originator as the third element
+        PacketPtr pkt = std::get<0>(bundle);
+        bool sendToMemory = std::get<1>(bundle);
+        int originator = std::get<2>(bundle);
 
         // Reset shared flag for this transaction
-        Addr addr = bundle.first->getAddr();
-        bool isRead = bundle.first->isRead() && !bundle.first->isWrite();
+        Addr addr = pkt->getAddr();
+        bool isRead = pkt->isRead() && !pkt->isWrite();
         
         if (isRead) {
             // For read requests, clear shared status initially
@@ -37,31 +38,29 @@ void SerializingBus::processMemReqEvent() {
         for (auto& it : cacheMap) {
             // Only send snoops if there's a valid originator and it's not this cache
             if (originator != -1 && it.first != originator) {
-                //std::cerr << "Bus sending snoop to cache " << it.first << " (originator was " << originator << ")\n";
                 DPRINTF(SBus, "Bus sending snoop to cache %d (originator was %d)\n", 
                         it.first, originator);
-                it.second->handleSnoopedReq(bundle.first);
+                it.second->handleSnoopedReq(pkt);
             } else {
-                //std::cerr << "Bus SKIPPING snoop to cache " << it.first << " (originator was " << originator << ")\n";
                 DPRINTF(SBus, "Bus SKIPPING snoop to cache %d (originator was %d)\n", 
                         it.first, originator);
             }
         }
 
         // Send to memory system or process locally based on the sendToMemory flag
-        if (bundle.second) {
-            memPort.sendPacket(bundle.first);
+        if (sendToMemory) {
+            memPort.sendPacket(pkt);
         }
         else {
             // Cannot be a read packet!
-            assert(!bundle.first->isRead());
+            assert(!pkt->isRead());
             
             // Make response only if needed and if there's a valid originator
             if (originator != -1) {
-                if (bundle.first->needsResponse()) {
-                    bundle.first->makeResponse();
+                if (pkt->needsResponse()) {
+                    pkt->makeResponse();
                 }
-                cacheMap[originator]->handleResponse(bundle.first);
+                cacheMap[originator]->handleResponse(pkt);
             } else {
                 std::cerr << "Bus: Warning - no valid originator to handle response\n";
             }
@@ -147,8 +146,9 @@ void SerializingBus::sendMemReqFunctional(PacketPtr pkt) {
 }
 
 void SerializingBus::sendMemReq(PacketPtr pkt, bool sendToMemory) {
-    // Store the request in the queue
-    memReqQueue.push_back({pkt, sendToMemory});
+    // Store the request in the queue along with the current originator
+    // This ensures we remember who sent the request even if currentGranted changes
+    memReqQueue.push_back(std::make_tuple(pkt, sendToMemory, currentGranted));
     
     // Schedule the event to process the request
     if (!memReqEvent.scheduled()) {
@@ -203,8 +203,6 @@ void SerializingBus::sendWriteback(int cacheId, long addr, unsigned char data) {
     delete new_pkt;
 }
 
-// need a data block version
-
 void SerializingBus::sendBlkWriteback(int cacheId, long addr, uint8_t *data, int blockSize) {
     DPRINTF(SBus, "sending writeback from %d @ %#x\n\n", cacheId, addr);
     RequestPtr req = std::make_shared<Request>(addr, blockSize, 0, 0);
@@ -213,6 +211,9 @@ void SerializingBus::sendBlkWriteback(int cacheId, long addr, uint8_t *data, int
     memcpy(dataBlock, data, blockSize);
     new_pkt->dataDynamic(dataBlock);
     memPort.sendFunctional(new_pkt);
+    
+    // Clean up
+    delete new_pkt;
 }
 
 }

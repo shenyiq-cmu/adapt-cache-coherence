@@ -25,10 +25,10 @@ MesiCache::MesiCache(const MesiCacheParams& params)
 }
 
 void MesiCache::handleCoherentCpuReq(PacketPtr pkt) {
-    std::cerr << "MESI[" << cacheId << "] cpu req for addr " << std::hex << pkt->getAddr() << std::dec
-              << " isRead=" << pkt->isRead() << " isWrite=" << pkt->isWrite() 
-              << " needsResponse=" << pkt->needsResponse() << "\n";
-    DPRINTF(CCache, "Mesi[%d] cpu req: %s\n\n", cacheId, pkt->print());
+    // std::cerr << "MESI[" << cacheId << "] cpu req for addr " << std::hex << pkt->getAddr() << std::dec
+    //           << " isRead=" << pkt->isRead() << " isWrite=" << pkt->isWrite() 
+    //           << " needsResponse=" << pkt->needsResponse() << "\n";
+    // DPRINTF(CCache, "Mesi[%d] cpu req: %s\n\n", cacheId, pkt->print());
     
     Addr addr = pkt->getAddr();
     bool read = pkt->isRead() && !pkt->isWrite();
