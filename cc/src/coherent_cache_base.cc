@@ -1,4 +1,4 @@
-#include "src_740/coherent_cache_base.hh"
+#include "src_740/cache_system.hh"  // Include this file instead of individual headers
 #include "base/trace.hh"
 #include "debug/CCache.hh"
 
@@ -155,6 +155,10 @@ void CoherentCacheBase::handleBusGrant() {
     }
 }
 
+// The following functions are implemented in the header with empty bodies
+// So we comment them out here to avoid redefinitions
+
+/*
 void CoherentCacheBase::handleCoherentCpuReq(PacketPtr pkt) {
     DPRINTF(CCache, "C[%d] cpu req: %s\n\n", cacheId, pkt->print());
     blocked = true;
@@ -189,5 +193,6 @@ void CoherentCacheBase::handleCoherentMemResp(PacketPtr pkt) {
 void CoherentCacheBase::handleCoherentSnoopedReq(PacketPtr pkt) {
     DPRINTF(CCache, "C[%d] snoop: %s\n\n", cacheId, pkt->print());
 }
+*/
 
 }

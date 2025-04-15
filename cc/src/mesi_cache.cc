@@ -1,329 +1,374 @@
 #include "src_740/mesi_cache.hh"
 #include "base/trace.hh"
 #include "debug/CCache.hh"
-#include <vector>
-#define CACHE_START 0x8000
-#define NOT_EXIST -1
-
-// cache coherence protocol and cache replacement protocol orthogonol
-// a cache line can still exist in the cache, but invalidated
+#include <iostream>
 
 namespace gem5 {
 
+// Define the cache states according to the diagram
+enum MesiState {
+    INVALID = 0,
+    EXCLUSIVE = 1,    // E: Exclusive clean
+    MODIFIED = 2,     // M: Modified (dirty)
+    SHARED_CLEAN = 3, // Sc: Shared clean
+    SHARED_MOD = 4    // Sm: Shared modified
+};
+
 MesiCache::MesiCache(const MesiCacheParams& params) 
-: CoherentCacheBase(params),
-  blockOffset(params.blockOffset),
-  setBit(params.setBit),
-  cacheSizeBit(params.cacheSizeBit) {
-    // for(int i = 0; i < 4096; i++){
-    //     share[i] = 0;
-    // }
-    DPRINTF(CCache, "blockoffset: %d, setbit: %d, cachsizebit: %d\n\n", blockOffset, setBit, cacheSizeBit);
-    // set up cache data structure
-    blockSize = 0x1 << blockOffset;
-    numSets = 0x1 << setBit;
-    cacheSize = 0x1 << cacheSizeBit;
-    numLines =  cacheSize / numSets / blockSize;
-
-    // init cache manager
-    MesiCacheMgr.resize(numSets);
-    
-    // init cache set manager
-    for(auto &setMgr : MesiCacheMgr){
-        setMgr.clkPtr = 0;
-        setMgr.cacheSet.resize(numLines);
-        // init cache lines
-        for(auto &cacheline : setMgr.cacheSet){
-            cacheline.clkFlag = 0;
-            cacheline.dirty = 0;
-            cacheline.valid = false;
-            cacheline.cohState = MesiState::Invalid;
-            cacheline.cacheBlock.resize(blockSize);
-        }
-    }
-
-    
+    : CoherentCacheBase(params),
+      valid(false),
+      cachedAddr(0),
+      cacheState(INVALID),
+      cacheData(0) {
+    std::cerr << "MESI Cache " << cacheId << " created\n";
+    DPRINTF(CCache, "Mesi[%d] cache created\n", cacheId);
 }
-
-uint64_t MesiCache::getTag(long addr){
-    return ((uint64_t)addr >> ((blockOffset + setBit)));
-}
-
-uint64_t MesiCache::getSet(long addr){
-    uint64_t mask = (0x1 << (blockOffset + setBit)) - 1;
-    return ((uint64_t)addr & mask) >> blockOffset;
-}
-
-bool MesiCache::isHit(long addr, int &lineID) {
-    // hit if tag matches and state is modified or shared
-    uint64_t setID = getSet(addr);
-    uint64_t tag = getTag(addr);
-    bool exist = false;
-
-    if(MesiCacheMgr[setID].tagMap.find(tag) != MesiCacheMgr[setID].tagMap.end()){
-        exist = true;
-        lineID = MesiCacheMgr[setID].tagMap[tag];
-    }
-
-    return (exist && (MesiCacheMgr[setID].cacheSet[lineID].cohState != MesiState::Invalid));
-}
-
-void MesiCache::allocate(long addr, MesiState state, const uint8_t *data) {
-    // assume clk_ptr now points to a empty line
-    uint64_t setID = getSet(addr);
-    uint64_t tag = getTag(addr);
-    cacheSetMgr &setMgr = MesiCacheMgr[setID];
-
-    assert(setMgr.cacheSet[setMgr.clkPtr].valid == false);
-
-    cacheLine &cline = setMgr.cacheSet[setMgr.clkPtr];
-    cline.dirty = false;
-    cline.clkFlag = 1;
-    cline.cohState = state;
-    cline.valid = true;
-    memcpy(&cline.cacheBlock[0], data, blockSize);
-
-    // update clk pointer of the circular array
-    setMgr.tagMap[tag] = setMgr.clkPtr;
-
-    setMgr.clkPtr = (setMgr.clkPtr + 1) % numLines;
-
-}
-
-void MesiCache::evict(long addr) {
-
-    uint64_t setID = getSet(addr);
-    uint64_t tag = getTag(addr);
-    cacheSetMgr &setMgr = MesiCacheMgr[setID];
-
-    if(setMgr.tagMap.size() < numLines){
-        // still have unallocated lines
-        return;
-    }
-
-    while(1){
-        if(setMgr.cacheSet[setMgr.clkPtr].clkFlag == 1){
-            setMgr.cacheSet[setMgr.clkPtr].clkFlag = 0;
-        }
-        else{
-            // evict block
-            cacheLine &cline = setMgr.cacheSet[setMgr.clkPtr];
-            // write back if dirty
-            if(cline.dirty){
-                assert(cline.cohState == MesiState::Modified);
-                writeback(addr, &cline.cacheBlock[0]);
-            }
-
-            cline.valid = false;
-            // other fields reset by allocate
-
-            break;
-        }
-
-        setMgr.clkPtr = (setMgr.clkPtr+1)%numLines;
-    }
-
-    // // write back only when modified
-    // if ((state == MesiState::Modified) && dirty) {
-    //     state = MesiState::Invalid;
-    //     writeback();     
-    // }
-    // else if(state == MesiState::Shared || state == MesiState::Exclusive){
-    //     state = MesiState::Invalid;
-    // }
-}
-
-void MesiCache::writeback(long addr, uint8_t* data){
-    DPRINTF(CCache, "Mesi[%d] writeback %#x, %d\n\n", cacheId, addr, data[0]);
-    bus->sendBlkWriteback(cacheId, addr, data, blockSize);        
-}
-
 
 void MesiCache::handleCoherentCpuReq(PacketPtr pkt) {
+    std::cerr << "MESI[" << cacheId << "] cpu req for addr " << std::hex << pkt->getAddr() << std::dec
+              << " isRead=" << pkt->isRead() << " isWrite=" << pkt->isWrite() 
+              << " needsResponse=" << pkt->needsResponse() << "\n";
     DPRINTF(CCache, "Mesi[%d] cpu req: %s\n\n", cacheId, pkt->print());
-    // your implementation here. See MiCache/MsiCache for reference.
-        blocked = true; // stop accepting new reqs from CPU until this one is done
-
-    long addr = pkt->getAddr();
-    bool isRead = pkt->isRead();
-    bool cacheHit = isHit(addr);
-
-    if (cacheHit) {
-        
-        assert(state != MesiState::Invalid);
-        
-
-        if (isRead) {
-            // no state change or snoop needed, reply now
-            pkt->makeResponse();
-            DPRINTF(CCache, "Mesi[%d] M read hit %#x\n\n", cacheId, addr);
+    
+    Addr addr = pkt->getAddr();
+    bool read = pkt->isRead() && !pkt->isWrite();
+    bool write = pkt->isWrite();
+    
+    // Check if we have the address in cache
+    bool hit = valid && (cachedAddr == addr) && (cacheState != INVALID);
+    
+    if (hit) {
+        // Cache hit
+        if (read) {
+            // Read hit - just return data
+            std::cerr << "MESI[" << cacheId << "] read hit in state " << cacheState << "\n";
+            DPRINTF(CCache, "Mesi[%d] read hit in state %d\n", cacheId, cacheState);
             
-            // if hit, the other cpu can be only in S or I, no need snoop
-            pkt->setData(&data);
-
-            // return the response packet to CPU
-            sendCpuResp(pkt);
-
-            // start accepting new requests
-            blocked = false;
-        }
-        else {
-            DPRINTF(CCache, "Mesi[%d] M write hit %#x\n\n", cacheId, addr);
-            dirty = true;
-            data = *pkt->getPtr<unsigned char>();
+            // For all states, we can serve a read hit locally
+            unsigned char* dataPtr = new unsigned char[1];
+            *dataPtr = cacheData;
             
-            if(state == MesiState::Shared){
-                // if shared, need to invalidate the other cpu's cache
-                assert(share[pkt->getAddr() - CACHE_START] == 1);
-                requestPacket = pkt;
-                bus->request(cacheId);
-            }
-            else{
-                // if modified or exclusive nothing to do, reply now
-                assert(share[pkt->getAddr() - CACHE_START] == 0);
-                state = MesiState::Modified;
-
+            if (pkt->needsResponse()) {
+                std::cerr << "MESI[" << cacheId << "] making response for read hit\n";
                 pkt->makeResponse();
-                                
+                pkt->setData(dataPtr);
                 sendCpuResp(pkt);
-
-                blocked = false;
+            } else {
+                std::cerr << "MESI[" << cacheId << "] packet doesn't need response for read hit\n";
+                delete[] dataPtr;
             }
+            return;
+        } else if (write) {
+            // Write hit
+            std::cerr << "MESI[" << cacheId << "] write hit in state " << cacheState << "\n";
+            DPRINTF(CCache, "Mesi[%d] write hit in state %d\n", cacheId, cacheState);
             
+            switch (cacheState) {
+                case EXCLUSIVE:
+                    // E → M on write
+                    std::cerr << "MESI[" << cacheId << "] E→M transition\n";
+                    DPRINTF(CCache, "Mesi[%d] E→M transition for addr %#x\n", cacheId, addr);
+                    cacheState = MODIFIED;
+                    cacheData = *(pkt->getPtr<unsigned char>());
+                    if (pkt->needsResponse()) {
+                        std::cerr << "MESI[" << cacheId << "] making response for E→M\n";
+                        pkt->makeResponse();
+                        sendCpuResp(pkt);
+                    } else {
+                        std::cerr << "MESI[" << cacheId << "] packet doesn't need response for E→M\n";
+                    }
+                    return;
+                    
+                case MODIFIED:
+                    // M → M on write (silent)
+                    std::cerr << "MESI[" << cacheId << "] M→M (silent)\n";
+                    DPRINTF(CCache, "Mesi[%d] M→M (silent) for addr %#x\n", cacheId, addr);
+                    cacheData = *(pkt->getPtr<unsigned char>());
+                    if (pkt->needsResponse()) {
+                        std::cerr << "MESI[" << cacheId << "] making response for M→M\n";
+                        pkt->makeResponse();
+                        sendCpuResp(pkt);
+                    } else {
+                        std::cerr << "MESI[" << cacheId << "] packet doesn't need response for M→M\n";
+                    }
+                    return;
+                    
+                case SHARED_CLEAN:
+                case SHARED_MOD:
+                    // Sc/Sm → Sm on write with PrWr(S) transaction
+                    // Need to inform other caches via bus
+                    std::cerr << "MESI[" << cacheId << "] " 
+                             << (cacheState == SHARED_CLEAN ? "Sc" : "Sm") 
+                             << "→Sm transition\n";
+                    DPRINTF(CCache, "Mesi[%d] %s→Sm for addr %#x\n", 
+                            cacheId, (cacheState == SHARED_CLEAN) ? "Sc" : "Sm", addr);
+                    cacheState = SHARED_MOD;
+                    cacheData = *(pkt->getPtr<unsigned char>());
+                    
+                    // We need bus access for this
+                    blocked = true;
+                    requestPacket = pkt;
+                    std::cerr << "MESI[" << cacheId << "] requesting bus for shared write\n";
+                    bus->request(cacheId);
+                    return;
+                    
+                default:
+                    panic("Invalid state");
+            }
         }
-
-    }
-    else {
-        DPRINTF(CCache, "Mesi[%d] cache miss %#x\n\n", cacheId, addr);
-        // if invalidate, need to "read" from memory, may change other cache state
+    } else {
+        // Cache miss - need to get data from memory or other caches
+        std::cerr << "MESI[" << cacheId << "] " << (read ? "read" : "write") 
+                 << " miss for addr " << std::hex << addr << std::dec << "\n";
+        DPRINTF(CCache, "Mesi[%d] %s miss for addr %#x\n", 
+                cacheId, read ? "read" : "write", addr);
+        
+        // Handle replacement if we have a valid entry
+        if (valid && cachedAddr != addr) {
+            if (cacheState == MODIFIED) {
+                // Need to write back first
+                std::cerr << "MESI[" << cacheId << "] writing back modified line " 
+                         << std::hex << cachedAddr << std::dec << "\n";
+                DPRINTF(CCache, "Mesi[%d] writing back modified line %#x\n", 
+                        cacheId, cachedAddr);
+                bus->sendWriteback(cacheId, cachedAddr, cacheData);
+            }
+        }
+        
+        // For both read and write misses, we need to get bus access
+        blocked = true;
         requestPacket = pkt;
-        if (pkt->isWrite()) {
-            dataToWrite = *pkt->getPtr<unsigned char>();
-        }
-
-        // request bus access
-        // this will lead to handleCoherentBusGrant() being called eventually
+        std::cerr << "MESI[" << cacheId << "] requesting bus for " 
+                 << (read ? "read" : "write") << " miss\n";
         bus->request(cacheId);
     }
 }
 
-
 void MesiCache::handleCoherentBusGrant() {
+    std::cerr << "MESI[" << cacheId << "] bus granted\n";
     DPRINTF(CCache, "Mesi[%d] bus granted\n\n", cacheId);
-    // your implementation here. See MiCache/MsiCache for reference.
+    
     assert(requestPacket != nullptr);
     assert(cacheId == bus->currentGranted);
-
-    bool isRead = requestPacket->isRead();
-    if (isRead) {
-        bus->sendMemReq(requestPacket, true);
-    }
-    else {
-        // optimization: write request doesn't actually need to go to memory, only needs to cause snoops.
-        // so use False as second arg to stop bus from sending to memory.
-        // It will still cause other caches to snoop, forcing M->I for other caches.
-        // This is correct since this is a writeback cache, so will update memory when ->I
-
-        // Also correct to send the write to memory anyway, but it's an unneeded write.
-        bus->sendMemReq(requestPacket, false);
-
+    
+    Addr addr = requestPacket->getAddr();
+    bool read = requestPacket->isRead() && !requestPacket->isWrite();
+    bool write = requestPacket->isWrite();
+    std::cerr << "MESI[" << cacheId << "] bus request for addr " << std::hex << addr << std::dec
+              << " isRead=" << read << " isWrite=" << write 
+              << " needsResponse=" << requestPacket->needsResponse() << "\n";
+    
+    // Check cache state after getting bus grant
+    bool hit = valid && (cachedAddr == addr) && (cacheState != INVALID);
+    
+    if (hit) {
+        // We had a hit but needed the bus (e.g., for write to shared line)
+        if (write) {
+            if (cacheState == SHARED_CLEAN || cacheState == SHARED_MOD) {
+                // PrWr(S) - inform other caches about our write to shared line
+                std::cerr << "MESI[" << cacheId << "] broadcasting PrWr(S)\n";
+                DPRINTF(CCache, "Mesi[%d] broadcasting PrWr(S) for addr %#x\n", 
+                        cacheId, addr);
+                
+                // Store our state so we don't invalidate ourselves via snoop
+                // This is a critical fix: we'll retain our state even if we get a snoop
+                int oldState = cacheState;
+                
+                // Send a write notification over the bus
+                // This will cause other caches to invalidate or update their state
+                bus->sendMemReq(requestPacket, false);
+                
+                // Make sure we restore our state in case it got invalidated
+                cacheState = oldState;
+                valid = true;
+                
+                // We already updated our local data in handleCoherentCpuReq
+                // Just make the response and send it
+                if (requestPacket->needsResponse()) {
+                    std::cerr << "MESI[" << cacheId << "] making response after PrWr(S)\n";
+                    requestPacket->makeResponse();
+                    sendCpuResp(requestPacket);
+                } else {
+                    std::cerr << "MESI[" << cacheId << "] packet doesn't need response after PrWr(S)\n";
+                }
+                requestPacket = nullptr;
+                
+                // Release the bus
+                std::cerr << "MESI[" << cacheId << "] releasing bus after PrWr(S)\n";
+                bus->release(cacheId);
+            }
+        }
+    } else {
+        // Cache miss - need to fetch from memory
+        if (read) {
+            // BusRdMiss - read miss, may get data from memory or other cache
+            std::cerr << "MESI[" << cacheId << "] sending BusRdMiss\n";
+            DPRINTF(CCache, "Mesi[%d] sending BusRdMiss for addr %#x\n", 
+                    cacheId, addr);
+            
+            // This will be handled in handleCoherentMemResp
+            bus->sendMemReq(requestPacket, true);
+            requestPacket = nullptr;
+        } else if (write) {
+            // BusRdMiss + transition to M - read for ownership
+            std::cerr << "MESI[" << cacheId << "] sending BusRdMiss for write (RFO)\n";
+            DPRINTF(CCache, "Mesi[%d] sending BusRdMiss for write (RFO) addr %#x\n", 
+                    cacheId, addr);
+            
+            // This will be handled in handleCoherentMemResp
+            bus->sendMemReq(requestPacket, true);
+            requestPacket = nullptr;
+        }
     }
 }
 
 void MesiCache::handleCoherentMemResp(PacketPtr pkt) {
+    std::cerr << "MESI[" << cacheId << "] mem resp for addr " << std::hex << pkt->getAddr() << std::dec
+              << " isResponse=" << pkt->isResponse() << " needsResponse=" << pkt->needsResponse() << "\n";
     DPRINTF(CCache, "Mesi[%d] mem resp: %s\n", cacheId, pkt->print());
-    // your implementation here. See MiCache/MsiCache for reference.
-    if(state != MesiState::Shared || pkt->isRead()){
-        assert(!isHit(pkt->getAddr()));
-    }
     
-    // Potentially sends a writeback to memory.
-    if(!isHit(pkt->getAddr())){
-        // evict when miss
-        evict();
-
-        // allocate new
-        allocate(pkt->getAddr());
-    }
-
-    bool isRead = pkt->isRead();
-    if (isRead) {
-        data = *pkt->getPtr<unsigned char>();
-        DPRINTF(CCache, "Mesi[%d] got data %d from read\n\n", cacheId, data);
-        // read, now in shared state
-        int share_entry = pkt->getAddr() - CACHE_START;
-        if(share[share_entry]){
-            // already shared with others
-            state = MesiState::Shared;
-            DPRINTF(CCache, "Mesi[%d] cache line shared\n\n", cacheId);
-        }
-        else{
-            // owned by myself
-            state = MesiState::Exclusive;
-            DPRINTF(CCache, "Mesi[%d] cache line exclusive\n\n", cacheId);
+    Addr addr = pkt->getAddr();
+    bool write = pkt->isWrite();
+    
+    // Handle the response from memory
+    if (pkt->isResponse()) {
+        // Update cache entry
+        cachedAddr = addr;
+        valid = true;
+        cacheData = *(pkt->getPtr<unsigned char>());
+        
+        // Determine the final state based on the original request
+        if (write) {
+            // For write, we transition to M state
+            cacheState = MODIFIED;
+            std::cerr << "MESI[" << cacheId << "] installed addr " << std::hex << addr 
+                     << std::dec << " in MODIFIED state\n";
+            DPRINTF(CCache, "Mesi[%d] installed addr %#x in MODIFIED state\n", 
+                    cacheId, addr);
+        } else {
+            // For read, we transition to E state if no other cache has it,
+            // otherwise Sc state
+            // This info is determined by snooping during bus transaction
+            if (bus->hasShared(addr)) {
+                cacheState = SHARED_CLEAN;
+                std::cerr << "MESI[" << cacheId << "] installed addr " << std::hex << addr 
+                         << std::dec << " in SHARED_CLEAN state\n";
+                DPRINTF(CCache, "Mesi[%d] installed addr %#x in SHARED_CLEAN state\n", 
+                        cacheId, addr);
+            } else {
+                cacheState = EXCLUSIVE;
+                std::cerr << "MESI[" << cacheId << "] installed addr " << std::hex << addr 
+                         << std::dec << " in EXCLUSIVE state\n";
+                DPRINTF(CCache, "Mesi[%d] installed addr %#x in EXCLUSIVE state\n", 
+                        cacheId, addr);
+            }
         }
         
+        // Unblock the cache
+        blocked = false;
+        
+        // Send response to CPU
+        std::cerr << "MESI[" << cacheId << "] sending response to CPU\n";
+        sendCpuResp(pkt);
+        
+        // Release the bus
+        std::cerr << "MESI[" << cacheId << "] releasing bus after mem resp\n";
+        bus->release(cacheId);
     }
-    else {
-        // do not read data from a write response packet. Use stored value.
-        DPRINTF(CCache, "Mesi[%d] storing %d in cache\n\n", cacheId, dataToWrite);
-        data = dataToWrite;
-
-        // when write, this cpu know that the other CPU will evict, so I have the only copy
-        share[pkt->getAddr() - CACHE_START] = 0;
-
-        // update dirty bit
-        dirty = true;
-        state = MesiState::Modified;
-    }
-
-    // the CPU has been waiting for a response. Send it this one.
-    sendCpuResp(pkt);
-
-    // release the bus so other caches can use it
-    bus->release(cacheId);
-
-    // start accepting new requests
-    blocked = false;
 }
 
 void MesiCache::handleCoherentSnoopedReq(PacketPtr pkt) {
+    std::cerr << "MESI[" << cacheId << "] snoop for addr " << std::hex << pkt->getAddr() << std::dec
+              << " isRead=" << pkt->isRead() << " isWrite=" << pkt->isWrite() << "\n";
     DPRINTF(CCache, "Mesi[%d] snoop: %s\n", cacheId, pkt->print());
-    // your implementation here. See MiCache/MsiCache for reference.
-    bool snoopHit = isHit(pkt->getAddr());
-    bool isRemoteRead = pkt->isRead();
-
-    // cache snooped a request on the shared bus. Update internal state if needed.
-    // only need to care about snoop hit on M
-    if (snoopHit) {
-        // the other cpu either read or write on this address, it has the shared copy
-        share[pkt->getAddr() - CACHE_START] = 1;
-
-        if(isRemoteRead){
-            //remote read
-            if(state == MesiState::Modified){
-                writeback(); // not evict, actually a write back
-                state = MesiState::Shared;
-            }
-            else if(state == MesiState::Exclusive){
-                state = MesiState::Shared;
-            }
-            DPRINTF(CCache, "Mesi[%d] snoop hit! Modified to shared\n\n", cacheId);
-
-        }
-        else{
-            // write
-            // will write back only when modified
-            writeback();
-            state = MesiState::Invalid;
-            DPRINTF(CCache, "Mesi[%d] snoop hit! Invalidate\n\n", cacheId);
-        }
+    
+    // Safety check - make sure bus has a valid originator
+    if (bus->currentGranted == -1) {
+        std::cerr << "MESI[" << cacheId << "] IGNORING SNOOP WITH NO ORIGINATOR for addr " 
+                 << std::hex << pkt->getAddr() << std::dec << "\n";
+        return;
     }
-    else {
-        DPRINTF(CCache, "Mesi[%d] snoop miss! nothing to do\n\n", cacheId);
+    
+    // Don't snoop your own requests
+    if (bus->currentGranted == cacheId) {
+        std::cerr << "MESI[" << cacheId << "] IGNORING OWN REQUEST FOR ADDR " 
+                 << std::hex << pkt->getAddr() << std::dec 
+                 << " - CRITICAL CHECK\n";
+        DPRINTF(CCache, "Mesi[%d] IGNORING OWN REQUEST\n", cacheId);
+        return;
+    }
+    
+    Addr addr = pkt->getAddr();
+    bool read = pkt->isRead() && !pkt->isWrite();
+    bool write = pkt->isWrite();
+    
+    // Check if we have the address in cache
+    if (valid && cachedAddr == addr && cacheState != INVALID) {
+        // We have the cache line, respond to snoop
+        if (read) {
+            // BusRdMiss from another cache
+            switch (cacheState) {
+                case EXCLUSIVE:
+                    // E → Sc transition
+                    std::cerr << "MESI[" << cacheId << "] E→Sc transition on snoop\n";
+                    DPRINTF(CCache, "Mesi[%d] E→Sc for addr %#x\n", cacheId, addr);
+                    cacheState = SHARED_CLEAN;
+                    bus->setShared(addr);  // Indicate that line is shared
+                    break;
+                    
+                case MODIFIED:
+                    // M → Sc transition with data update
+                    std::cerr << "MESI[" << cacheId << "] M→Sc transition on snoop\n";
+                    DPRINTF(CCache, "Mesi[%d] M→Sc for addr %#x\n", cacheId, addr);
+                    cacheState = SHARED_CLEAN;
+                    bus->setShared(addr);  // Indicate that line is shared
+                    
+                    // Write back our modified data
+                    std::cerr << "MESI[" << cacheId << "] writing back modified data on snoop\n";
+                    bus->sendWriteback(cacheId, addr, cacheData);
+                    break;
+                    
+                case SHARED_CLEAN:
+                    // Sc → Sc (no change)
+                    std::cerr << "MESI[" << cacheId << "] Sc→Sc (no change) on snoop\n";
+                    DPRINTF(CCache, "Mesi[%d] Sc→Sc (no change) for addr %#x\n", cacheId, addr);
+                    bus->setShared(addr);  // Indicate that line is shared
+                    break;
+                    
+                case SHARED_MOD:
+                    // Sm → Sc with data update
+                    std::cerr << "MESI[" << cacheId << "] Sm→Sc transition on snoop\n";
+                    DPRINTF(CCache, "Mesi[%d] Sm→Sc for addr %#x\n", cacheId, addr);
+                    cacheState = SHARED_CLEAN;
+                    bus->setShared(addr);  // Indicate that line is shared
+                    
+                    // Write back our modified data
+                    std::cerr << "MESI[" << cacheId << "] writing back modified data on snoop\n";
+                    bus->sendWriteback(cacheId, addr, cacheData);
+                    break;
+                    
+                default:
+                    panic("Invalid state");
+            }
+        } else if (write) {
+            // BusWr from another cache
+            switch (cacheState) {
+                case EXCLUSIVE:
+                case MODIFIED:
+                case SHARED_CLEAN:
+                case SHARED_MOD:
+                    // All states → I on BusWr (invalidation)
+                    std::cerr << "MESI[" << cacheId << "] →I transition on write snoop\n";
+                    DPRINTF(CCache, "Mesi[%d] →I for addr %#x due to BusWr\n", cacheId, addr);
+                    cacheState = INVALID;
+                    valid = false;
+                    break;
+                    
+                default:
+                    panic("Invalid state");
+            }
+        }
     }
 }
-
-
 
 }

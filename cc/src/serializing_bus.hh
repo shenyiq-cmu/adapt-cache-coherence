@@ -3,24 +3,27 @@
 #include "mem/port.hh"
 #include "params/SerializingBus.hh"
 #include "sim/sim_object.hh"
-#include "src_740/coherent_cache_base.hh"
+
 #include <list>
 #include <map>
+#include <unordered_set>
 
 namespace gem5 {
 
+// Forward declaration
 class CoherentCacheBase;
 
 class SerializingBus : public SimObject {
-   public:
-    
+  private:
+    // port for memory
     class MemSidePort : public RequestPort {
-       public:
-        SerializingBus *owner;
-        PacketPtr blockedPacket = nullptr;
+      private:
+        SerializingBus* owner;
+        PacketPtr blockedPacket;
 
-        MemSidePort(const std::string &name, SerializingBus *owner)
-            : RequestPort(name, owner), owner(owner) {}
+      public:
+        MemSidePort(const std::string& name, SerializingBus* owner)
+            : RequestPort(name, owner), owner(owner), blockedPacket(nullptr) {}
 
         void sendPacket(PacketPtr pkt);
 
@@ -29,37 +32,60 @@ class SerializingBus : public SimObject {
         void recvRangeChange() override;
     };
 
+    // Memory side port
     MemSidePort memPort;
 
-    std::list<std::pair<PacketPtr, bool>> memReqQueue;
-    EventFunctionWrapper memReqEvent;
-    void processMemReqEvent();
-
-    std::list<int> busRequestQueue;
-    int currentGranted = -1;
-    EventFunctionWrapper grantEvent;
-    void processGrantEvent();
-
+    // Map from cache ID to cache object
     std::map<int, CoherentCacheBase*> cacheMap;
 
-    SerializingBus(const SerializingBusParams &params);
+    // List of pending memory requests
+    std::list<std::pair<PacketPtr, bool>> memReqQueue;
 
-    Port &getPort(const std::string &port_name,
-                  PortID idx = InvalidPortID) override;
+    // List of caches waiting for bus
+    std::list<int> busRequestQueue;
+
+    // Events for sending memory requests and granting the bus
+    EventFunctionWrapper memReqEvent;
+    EventFunctionWrapper grantEvent;
+    
+    // Event handling functions
+    void processMemReqEvent();
+    void processGrantEvent();
+
+    // Set of addresses currently in shared state
+    std::unordered_set<Addr> sharedAddresses;
+
+  public:
+    // The cache that currently has bus access - made public so caches can check
+    int currentGranted;
+
+    SerializingBus(const SerializingBusParams& params);
+
+    Port& getPort(const std::string& port_name, PortID idx = InvalidPortID) override;
+
+    void sendMemReq(PacketPtr pkt, bool sendToMemory);
+    void sendMemReqFunctional(PacketPtr pkt);
+
+    void registerCache(int cacheId, CoherentCacheBase* cache);
+
+    bool handleResponse(PacketPtr pkt);
 
     AddrRangeList getAddrRanges() const;
     void sendRangeChange();
 
-    bool handleResponse(PacketPtr pkt);
-    void sendMemReqFunctional(PacketPtr pkt);
-
-
-    // public API
-    void sendMemReq(PacketPtr pkt, bool sendToMemory);
-    void registerCache(int cacheId, CoherentCacheBase* cache);
+    // request bus access
     void request(int cacheId);
+
+    // release bus
     void release(int cacheId);
+
+    // write back
     void sendWriteback(int cacheId, long addr, unsigned char data);
-    void sendBlkWriteback(int cacheId, long addr, uint8_t *data, int blockSize);
+
+    // Methods for shared state tracking
+    bool hasShared(Addr addr) const { return sharedAddresses.find(addr) != sharedAddresses.end(); }
+    void setShared(Addr addr) { sharedAddresses.insert(addr); }
+    void clearShared(Addr addr) { sharedAddresses.erase(addr); }
 };
+
 }
