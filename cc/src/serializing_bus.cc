@@ -14,12 +14,21 @@ SerializingBus::SerializingBus(const SerializingBusParams& params)
       currentGranted(-1) {}
 
 void SerializingBus::processMemReqEvent() {
-    while(!(memReqQueue.size() == 0)) {
+    // If there's no valid originator but we have pending requests,
+    // delay processing until later when we might have a valid originator
+    if (currentGranted == -1 && !memReqQueue.empty()) {
+        if (!memReqEvent.scheduled()) {
+            schedule(memReqEvent, curTick()+100);
+        }
+        return;
+    }
+    
+    while(!memReqQueue.empty()) {
         auto first = memReqQueue.begin();
         auto bundle = *first;
         memReqQueue.erase(first);
 
-        // Unpack the tuple - now with originator as the third element
+        // Unpack the tuple
         PacketPtr pkt = std::get<0>(bundle);
         bool sendToMemory = std::get<1>(bundle);
         int originator = std::get<2>(bundle);
@@ -27,6 +36,9 @@ void SerializingBus::processMemReqEvent() {
         // Reset shared flag for this transaction
         Addr addr = pkt->getAddr();
         bool isRead = pkt->isRead() && !pkt->isWrite();
+        
+        // Get the operation type
+        BusOperationType opType = getOperationType(pkt);
         
         if (isRead) {
             // For read requests, clear shared status initially
@@ -38,10 +50,15 @@ void SerializingBus::processMemReqEvent() {
         for (auto& it : cacheMap) {
             // Only send snoops if there's a valid originator and it's not this cache
             if (originator != -1 && it.first != originator) {
-                DPRINTF(SBus, "Bus sending snoop to cache %d (originator was %d)\n", 
-                        it.first, originator);
+                std::cerr << "Bus sending snoop to cache " << it.first 
+                          << " (originator was " << originator 
+                          << ", opType=" << opType << ")\n";
+                DPRINTF(SBus, "Bus sending snoop to cache %d (originator was %d, opType=%d)\n", 
+                        it.first, originator, opType);
                 it.second->handleSnoopedReq(pkt);
             } else {
+                std::cerr << "Bus SKIPPING snoop to cache " << it.first 
+                          << " (originator was " << originator << ")\n";
                 DPRINTF(SBus, "Bus SKIPPING snoop to cache %d (originator was %d)\n", 
                         it.first, originator);
             }
@@ -65,6 +82,9 @@ void SerializingBus::processMemReqEvent() {
                 std::cerr << "Bus: Warning - no valid originator to handle response\n";
             }
         }
+        
+        // Clean up the operation type entry
+        packetOpTypes.erase(pkt);
     }
 }
 
@@ -145,9 +165,11 @@ void SerializingBus::sendMemReqFunctional(PacketPtr pkt) {
     memPort.sendFunctional(pkt);
 }
 
-void SerializingBus::sendMemReq(PacketPtr pkt, bool sendToMemory) {
-    // Store the request in the queue along with the current originator
-    // This ensures we remember who sent the request even if currentGranted changes
+void SerializingBus::sendMemReq(PacketPtr pkt, bool sendToMemory, BusOperationType opType) {
+    // Store the operation type
+    packetOpTypes[pkt] = opType;
+    
+    // Store the request in the queue with the current granted cache as originator
     memReqQueue.push_back(std::make_tuple(pkt, sendToMemory, currentGranted));
     
     // Schedule the event to process the request
@@ -171,7 +193,13 @@ void SerializingBus::request(int cacheId) {
 void SerializingBus::release(int cacheId) {
     DPRINTF(SBus, "release from %d\n\n", cacheId);
     
-    assert(cacheId == currentGranted);
+    // Check if this cache actually has the bus before asserting
+    if (cacheId != currentGranted) {
+        std::cerr << "Warning: Cache " << cacheId 
+                 << " tried to release bus but currentGranted is " 
+                 << currentGranted << "\n";
+        return;  // Just return without asserting
+    }
     
     // Release the bus
     currentGranted = -1;

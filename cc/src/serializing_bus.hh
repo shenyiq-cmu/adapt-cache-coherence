@@ -14,6 +14,13 @@ namespace gem5 {
 // Forward declaration
 class CoherentCacheBase;
 
+// Define bus operation types
+enum BusOperationType {
+    BUS_READ = 0,           // BusRd - read request
+    BUS_READ_EXCLUSIVE = 1, // BusRdX - read exclusive (invalidate other copies)
+    BUS_UPDATE = 2          // BusUpd - update operation for Sm state
+};
+
 class SerializingBus : public SimObject {
   private:
     // port for memory
@@ -42,6 +49,9 @@ class SerializingBus : public SimObject {
     // List of pending memory requests (packet, sendToMemory, originator)
     std::list<std::tuple<PacketPtr, bool, int>> memReqQueue;
 
+    // Track the operation type for each packet
+    std::map<PacketPtr, BusOperationType> packetOpTypes;
+
     // List of caches waiting for bus
     std::list<int> busRequestQueue;
 
@@ -64,7 +74,7 @@ class SerializingBus : public SimObject {
 
     Port& getPort(const std::string& port_name, PortID idx = InvalidPortID) override;
 
-    void sendMemReq(PacketPtr pkt, bool sendToMemory);
+    void sendMemReq(PacketPtr pkt, bool sendToMemory, BusOperationType opType = BUS_READ);
     void sendMemReqFunctional(PacketPtr pkt);
 
     void registerCache(int cacheId, CoherentCacheBase* cache);
@@ -90,6 +100,16 @@ class SerializingBus : public SimObject {
     bool hasShared(Addr addr) const { return sharedAddresses.find(addr) != sharedAddresses.end(); }
     void setShared(Addr addr) { sharedAddresses.insert(addr); }
     void clearShared(Addr addr) { sharedAddresses.erase(addr); }
+    
+    // Get operation type for a packet
+    BusOperationType getOperationType(PacketPtr pkt) {
+        auto it = packetOpTypes.find(pkt);
+        if (it != packetOpTypes.end()) {
+            return it->second;
+        }
+        // Default to READ if not found
+        return BUS_READ;
+    }
 };
 
 }
