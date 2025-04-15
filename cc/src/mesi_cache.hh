@@ -28,6 +28,7 @@ class MesiCache : public CoherentCacheBase {
 
     typedef struct CacheLine{
         std::vector<uint8_t> cacheBlock;
+        uint64_t tag;
         MesiState cohState;
         bool dirty;
         bool clkFlag;
@@ -42,14 +43,15 @@ class MesiCache : public CoherentCacheBase {
         int clkPtr;
     } cacheSetMgr;
 
-    // single entry cache = all bits are used for tag
-    unsigned char data = 0;
-    long tag = 0;
-    bool dirty = false;
+    // // single entry cache = all bits are used for tag
+    // unsigned char data = 0;
+    // long tag = 0;
+    // bool dirty = false;
 
-    unsigned char dataToWrite = 0;
+    // unsigned char dataToWrite = 0;
+    std::vector<uint8_t> dataToWrite;
 
-    bool share[4096];
+    // bool share[4096];
 
     int blockOffset = 5;
     int blockSize = 32;
@@ -66,7 +68,7 @@ class MesiCache : public CoherentCacheBase {
     uint64_t getTag(long addr);
     uint64_t getSet(long addr);
     bool isHit(long addr, int &lineID);
-    void allocate(long addr, MesiState state, const uint8_t *data);
+    int allocate(long addr);
     void evict(long addr);
     void writeback(long addr, uint8_t* data);
     

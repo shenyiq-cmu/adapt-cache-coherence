@@ -11,7 +11,29 @@ SerializingBus::SerializingBus(const SerializingBusParams& params)
       memReqEvent([this](){ processMemReqEvent(); }, name()), 
       grantEvent([this](){ processGrantEvent(); }, name()) {}
 
+void SerializingBus::generateAlignAccess(PacketPtr pkt){
 
+    // need to align memory access on block size
+    uint64_t addr = pkt->getAddr();
+    uint64_t blk_addr = pkt->getBlockAddr(blockSize);
+    uint64_t size = pkt->getSize();
+
+    if(addr == blk_addr && size == blockSize){
+        bool isRead = pkt->isRead();
+        if (isRead) {
+            memPort.sendPacket(pkt);
+        }
+    }
+    else{
+        PacketPtr newreqPacket = new Packet(pkt->req, MemCmd::ReadReq, blockSize);
+        newreqPacket->allocate();
+        
+        delete pkt;
+
+        pkt = newreqPacket;
+        memPort.sendPacket(newreqPacket);
+    }
+}
 
 void SerializingBus::processMemReqEvent() {
     while(!(memReqQueue.size() == 0)) {
@@ -28,7 +50,8 @@ void SerializingBus::processMemReqEvent() {
 
         // send to memory system?
         if (bundle.second) {
-            memPort.sendPacket(bundle.first);
+            // memPort.sendPacket(bundle.first);
+            generateAlignAccess(bundle.first);
         }
         else {
             // cannot be a read packet!

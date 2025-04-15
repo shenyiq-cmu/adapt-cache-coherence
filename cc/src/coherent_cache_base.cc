@@ -56,6 +56,7 @@ void CoherentCacheBase::handleFunctional(PacketPtr pkt) {
 
 void CoherentCacheBase::sendRangeChange() { cpuPort.sendRangeChange(); }
 
+// todo: modify hardcode
 bool CoherentCacheBase::isCacheablePacket(PacketPtr pkt) {
     auto addr = pkt->getAddr();
     return (addr >= 0x8000 && addr < 0x8100);
@@ -175,6 +176,8 @@ void CoherentCacheBase::handleCoherentBusGrant() {
     // belongs to this cache for now
     bus->sendMemReq(requestPacket, true);
     requestPacket = nullptr;
+    // rest shared wire
+    bus->sharedWire = false;
 }
 
 void CoherentCacheBase::handleCoherentMemResp(PacketPtr pkt) {

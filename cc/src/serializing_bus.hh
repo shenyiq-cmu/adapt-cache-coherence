@@ -33,6 +33,7 @@ class SerializingBus : public SimObject {
 
     std::list<std::pair<PacketPtr, bool>> memReqQueue;
     EventFunctionWrapper memReqEvent;
+    void generateAlignAccess(PacketPtr pkt);
     void processMemReqEvent();
 
     std::list<int> busRequestQueue;
@@ -41,6 +42,8 @@ class SerializingBus : public SimObject {
     void processGrantEvent();
 
     std::map<int, CoherentCacheBase*> cacheMap;
+
+    bool sharedWire = false;
 
     SerializingBus(const SerializingBusParams &params);
 

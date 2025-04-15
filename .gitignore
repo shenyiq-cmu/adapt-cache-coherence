@@ -16,11 +16,6 @@
 !Cache.cpp
 !Controller.h
 !Scheduler.h
-<<<<<<< HEAD
-!cc/binaries/*
-!cc/src/*
-=======
 !cc/src/*
 !cc/binaries/*
 !cc/configs/*
->>>>>>> origin/main
