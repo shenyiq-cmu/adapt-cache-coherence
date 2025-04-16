@@ -42,7 +42,10 @@ void SerializingBus::processMemReqEvent() {
         
         // For BUS_UPDATE operations, we need to make sure shared bit is set
         if (opType == BUS_UPDATE) {
+            // Ensure this is marked as a shared address
             setShared(addr);
+            
+            // Do NOT try to modify the packet size - this causes errors
         } else if (isRead) {
             // For read requests, clear shared status initially
             // It will be set again during snooping if any cache has the line
