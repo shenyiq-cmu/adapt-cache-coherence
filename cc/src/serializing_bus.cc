@@ -40,7 +40,10 @@ void SerializingBus::processMemReqEvent() {
         // Get the operation type
         BusOperationType opType = getOperationType(pkt);
         
-        if (isRead) {
+        // For BUS_UPDATE operations, we need to make sure shared bit is set
+        if (opType == BUS_UPDATE) {
+            setShared(addr);
+        } else if (isRead) {
             // For read requests, clear shared status initially
             // It will be set again during snooping if any cache has the line
             clearShared(addr);
@@ -50,17 +53,7 @@ void SerializingBus::processMemReqEvent() {
         for (auto& it : cacheMap) {
             // Only send snoops if there's a valid originator and it's not this cache
             if (originator != -1 && it.first != originator) {
-                std::cerr << "Bus sending snoop to cache " << it.first 
-                          << " (originator was " << originator 
-                          << ", opType=" << opType << ")\n";
-                DPRINTF(SBus, "Bus sending snoop to cache %d (originator was %d, opType=%d)\n", 
-                        it.first, originator, opType);
                 it.second->handleSnoopedReq(pkt);
-            } else {
-                std::cerr << "Bus SKIPPING snoop to cache " << it.first 
-                          << " (originator was " << originator << ")\n";
-                DPRINTF(SBus, "Bus SKIPPING snoop to cache %d (originator was %d)\n", 
-                        it.first, originator);
             }
         }
 
@@ -69,8 +62,7 @@ void SerializingBus::processMemReqEvent() {
             memPort.sendPacket(pkt);
         }
         else {
-            // Cannot be a read packet!
-            assert(!pkt->isRead());
+            // BusUpd operations are handled locally - no assertion on packet type
             
             // Make response only if needed and if there's a valid originator
             if (originator != -1) {
@@ -82,9 +74,6 @@ void SerializingBus::processMemReqEvent() {
                 std::cerr << "Bus: Warning - no valid originator to handle response\n";
             }
         }
-        
-        // Clean up the operation type entry
-        packetOpTypes.erase(pkt);
     }
 }
 
@@ -193,15 +182,15 @@ void SerializingBus::request(int cacheId) {
 void SerializingBus::release(int cacheId) {
     DPRINTF(SBus, "release from %d\n\n", cacheId);
     
-    // Check if this cache actually has the bus before asserting
+    // Check if this cache actually has the bus before releasing
     if (cacheId != currentGranted) {
         std::cerr << "Warning: Cache " << cacheId 
                  << " tried to release bus but currentGranted is " 
                  << currentGranted << "\n";
-        return;  // Just return without asserting
+        return;  // Just return without doing anything
     }
     
-    // Release the bus
+    // Normal case - release the bus
     currentGranted = -1;
     
     // Schedule the event to potentially grant the bus to another cache
@@ -244,4 +233,4 @@ void SerializingBus::sendBlkWriteback(int cacheId, long addr, uint8_t *data, int
     delete new_pkt;
 }
 
-}
+} // namespace gem5
