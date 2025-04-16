@@ -15,24 +15,36 @@ void SerializingBus::generateAlignAccess(PacketPtr pkt){
 
     // need to align memory access on block size
     uint64_t addr = pkt->getAddr();
-    uint64_t blk_addr = pkt->getBlockAddr(blockSize);
+    uint64_t blk_addr = pkt->getBlockAddr(cacheBlockSize);
     uint64_t size = pkt->getSize();
 
-    if(addr == blk_addr && size == blockSize){
-        bool isRead = pkt->isRead();
-        if (isRead) {
-            memPort.sendPacket(pkt);
-        }
-    }
-    else{
-        PacketPtr newreqPacket = new Packet(pkt->req, MemCmd::ReadReq, blockSize);
-        newreqPacket->allocate();
+    // if(addr == blk_addr && size == blockSize){
+    //     bool isRead = pkt->isRead();
+    //     if (isRead) {
+    //         memPort.sendPacket(pkt);
+    //     }
+    // }
+    // else{
+    //     PacketPtr newreqPacket = new Packet(pkt->req, MemCmd::ReadReq, blockSize);
+    //     newreqPacket->allocate();
         
-        delete pkt;
+    //     // can not delete, still need for requestPacket
+    //     // delete pkt;
 
-        pkt = newreqPacket;
-        memPort.sendPacket(newreqPacket);
-    }
+    //     pkt = newreqPacket;
+    //     memPort.sendPacket(newreqPacket);
+    // }
+
+    std::cerr<<"create new packet to send to mem"<<std::endl;
+
+    PacketPtr newreqPacket = new Packet(pkt->req, MemCmd::ReadReq, cacheBlockSize);
+    newreqPacket->allocate();
+    
+    // can not delete, still need for requestPacket
+    // delete pkt;
+
+    pkt = newreqPacket;
+    memPort.sendPacket(newreqPacket);
 }
 
 void SerializingBus::processMemReqEvent() {
@@ -51,7 +63,12 @@ void SerializingBus::processMemReqEvent() {
         // send to memory system?
         if (bundle.second) {
             // memPort.sendPacket(bundle.first);
-            generateAlignAccess(bundle.first);
+            if(cacheMap[currentGranted]->isCacheablePacket(bundle.first)){
+                generateAlignAccess(bundle.first);
+            }
+            else{
+                memPort.sendPacket(bundle.first);
+            }
         }
         else {
             // cannot be a read packet!

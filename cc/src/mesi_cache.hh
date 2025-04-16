@@ -71,6 +71,8 @@ class MesiCache : public CoherentCacheBase {
     int allocate(long addr);
     void evict(long addr);
     void writeback(long addr, uint8_t* data);
+    void printDataHex(uint8_t* data, int length);
+    uint64_t getBlkAddr(long addr);
     
     void handleCoherentCpuReq(PacketPtr pkt) override;
     void handleCoherentBusGrant() override;

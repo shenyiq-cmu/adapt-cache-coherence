@@ -26,7 +26,8 @@ MesiCache::MesiCache(const MesiCacheParams& params)
     numLines =  cacheSize / numSets / blockSize;
 
     DPRINTF(CCache, "blocksize: %d, setsize: %d, cachsize: %d\n\n", blockSize, numLines, cacheSize);
-
+    // std::cerr<<"print here"<<std::endl;
+    // std::cout<<"print here"<<std::endl;
     // init cache manager
     MesiCacheMgr.resize(numSets);
     
@@ -47,7 +48,17 @@ MesiCache::MesiCache(const MesiCacheParams& params)
 
     dataToWrite.resize(blockSize);
 
+    bus->cacheBlockSize = blockSize;
+
     
+}
+
+void MesiCache::printDataHex(uint8_t* data, int length){
+    DPRINTF(CCache, "DATA: ");
+    for(int i = 0; i < length; i++){
+        printf("%02x", data[i]);
+    }
+    printf("\n");
 }
 
 uint64_t MesiCache::getTag(long addr){
@@ -57,6 +68,10 @@ uint64_t MesiCache::getTag(long addr){
 uint64_t MesiCache::getSet(long addr){
     uint64_t mask = (0x1 << (blockOffset + setBit)) - 1;
     return ((uint64_t)addr & mask) >> blockOffset;
+}
+
+uint64_t MesiCache::getBlkAddr(long addr){
+    return ((addr >> blockOffset) << blockOffset);
 }
 
 bool MesiCache::isHit(long addr, int &lineID) {
@@ -154,14 +169,18 @@ void MesiCache::evict(long addr) {
     // }
 }
 
-void MesiCache::writeback(long addr, uint8_t* data){
-    DPRINTF(CCache, "Mesi[%d] writeback %#x, %d\n\n", cacheId, addr, data[0]);
-    bus->sendBlkWriteback(cacheId, addr, data, blockSize);        
+void MesiCache::writeback(long addr, uint8_t* data){ 
+    
+    bus->sendBlkWriteback(cacheId, getBlkAddr(addr), data, blockSize);
+    
+    DPRINTF(CCache, "Mesi[%d] writeback %#x with DATA\n\n", cacheId, addr);
+    printDataHex(data, blockSize);
 }
 
 
 void MesiCache::handleCoherentCpuReq(PacketPtr pkt) {
     DPRINTF(CCache, "Mesi[%d] cpu req: %s\n\n", cacheId, pkt->print());
+    std::cerr<< "cache: "<<cacheId<<"handleCPUreq"<<std::endl;
     // your implementation here. See MiCache/MsiCache for reference.
     blocked = true; // stop accepting new reqs from CPU until this one is done
     int lineID;
@@ -214,6 +233,10 @@ void MesiCache::handleCoherentCpuReq(PacketPtr pkt) {
                 // assert(share[pkt->getAddr() - CACHE_START] == 0);
                 DPRINTF(CCache, "Mesi[%d] write hit %#x, set: %d, line: %d\n\n", cacheId, addr, setID, lineID);
 
+                if(currCacheline.cohState == MesiState::Exclusive){
+                    DPRINTF(CCache, "STATE_PrWr: Mesi[%d] current line upgrade from Exclusive to Modified\n\n", cacheId);                   
+                }
+
                 // cache line update
                 currCacheline.cohState = MesiState::Modified;
                 pkt->writeDataToBlock(&currCacheline.cacheBlock[0], blockSize);
@@ -248,6 +271,7 @@ void MesiCache::handleCoherentCpuReq(PacketPtr pkt) {
 
 void MesiCache::handleCoherentBusGrant() {
     DPRINTF(CCache, "Mesi[%d] bus granted\n\n", cacheId);
+    std::cerr<< "cache: "<<cacheId<<"handleCOhbusgrant"<<std::endl;
     // your implementation here. See MiCache/MsiCache for reference.
     assert(requestPacket != nullptr);
     assert(cacheId == bus->currentGranted);
@@ -255,11 +279,28 @@ void MesiCache::handleCoherentBusGrant() {
     uint64_t addr = requestPacket->getAddr();
     uint64_t blk_addr = requestPacket->getBlockAddr(blockSize);
     uint64_t size = requestPacket->getSize();
-    panic_if(addr - blk_addr + size > blockSize, "access span multiple lines");
+    std::cerr<< "addr: " << addr << "blk_addr" << blk_addr << "size: "<<size<<std::endl;
+    // panic_if(addr - blk_addr + size > blockSize, "access span multiple lines");
     // requestPacket->setAddr(blk_addr);
     // requestPacket->setSize(blockSize);
 
-    if(addr == blk_addr && size == blockSize){
+    int lineID;
+
+    uint64_t setID = getSet(addr);
+    uint64_t tag = getTag(addr);
+    bool cacheHit = isHit(addr, lineID);
+    // cacheHit means a transition from shared to modified
+
+    if(requestPacket->isRead()){
+        DPRINTF(CCache, "Mesi[%d] broadcast BusRd for block address %#x\n\n", cacheId, blk_addr);
+    }
+    else{
+        DPRINTF(CCache, "Mesi[%d] broadcast BusRdX for block address %#x\n\n", cacheId, blk_addr);
+    }
+
+    bus->sharedWire = false;
+
+    if((addr == blk_addr && size == blockSize) || cacheHit){
         bool isRead = requestPacket->isRead();
         if (isRead) {
             // see second argument as whether I need data read from memory now
@@ -285,32 +326,52 @@ void MesiCache::handleCoherentBusGrant() {
 
 }
 
-void MesiCache::handleCoherentMemResp(PacketPtr pkt) {
-    DPRINTF(CCache, "Mesi[%d] mem resp: %s\n", cacheId, pkt->print());
+void MesiCache::handleCoherentMemResp(PacketPtr respPacket) {
+    DPRINTF(CCache, "Mesi[%d] mem resp: %s\n", cacheId, respPacket->print());
+    std::cerr<< "cache: "<<cacheId<<"handleCOhMemreq"<<std::endl;
     // your implementation here. See MiCache/MsiCache for reference.
     int lineID;
-    long addr = pkt->getAddr();
-    bool isRead = pkt->isRead();
+    assert(requestPacket != nullptr);
+    // for read requests, the response will only be read resp, just store to the corresponding cache line
+
+    // for write requests, if the response is write resp, it means no memory read is performed, just write to the
+    // current cache struct; if the response is read resp, it means we need to write memory data first then modify it
+    long addr = requestPacket->getAddr();
+    bool isRead = requestPacket->isRead();
 
     uint64_t setID = getSet(addr);
     uint64_t tag = getTag(addr);
     bool cacheHit = isHit(addr, lineID);
 
+    bool memoryFetch = respPacket->isRead();
+
     // if it's a hit, a write request to shared state, update cache line state and return
     if(cacheHit){
         assert(lineID != NOT_EXIST);
         assert(MesiCacheMgr[setID].cacheSet[lineID].cohState == MesiState::Shared);
-        // assert(!isRead);
+        assert(!memoryFetch);
 
-        DPRINTF(CCache, "Mesi[%d] storing %d in cache\n\n", cacheId, dataToWrite[0]);
+        
         MesiCacheMgr[setID].cacheSet[lineID].cohState = MesiState::Modified;
         MesiCacheMgr[setID].cacheSet[lineID].dirty = true;
         MesiCacheMgr[setID].cacheSet[lineID].clkFlag = 1;
-        memcpy(&MesiCacheMgr[setID].cacheSet[lineID].cacheBlock[0], &dataToWrite[0], blockSize);
+        // can only modify parts that requested
+        requestPacket->writeDataToBlock(&MesiCacheMgr[setID].cacheSet[lineID].cacheBlock[0], blockSize);
+        DPRINTF(CCache, "STATE_PrWr: Mesi[%d] storing DATA in cache and upgrade from Shared to Modified\n\n", cacheId);
+        printDataHex(&MesiCacheMgr[setID].cacheSet[lineID].cacheBlock[0], blockSize);
+        // memcpy(&MesiCacheMgr[setID].cacheSet[lineID].cacheBlock[0], &dataToWrite[0], blockSize);
+
+        // the CPU has been waiting for a response. Send it this one.
+        sendCpuResp(respPacket);
+
+        // release the bus so other caches can use it
+        bus->release(cacheId);
+
+        // start accepting new requests
+        blocked = false;
 
         return;
     }
-
 
 
     // if it's not a hit,
@@ -319,19 +380,40 @@ void MesiCache::handleCoherentMemResp(PacketPtr pkt) {
         cacheLine &currCacheline = MesiCacheMgr[setID].cacheSet[lineID];
         assert(currCacheline.cohState == MesiState::Invalid);
         if(isRead){
-            DPRINTF(CCache, "Mesi[%d] got data %d from read\n\n", cacheId, currCacheline.cacheBlock[0]);
+            
+            assert(memoryFetch);
             // decide on exclusive or shared based on snoop result
-            currCacheline.cohState = (bus->sharedWire)? MesiState::Exclusive : MesiState::Shared;
+            currCacheline.cohState = (bus->sharedWire)? MesiState::Shared : MesiState::Exclusive;
+            // reset shared wire
+            bus->sharedWire = false;
             currCacheline.clkFlag = 1;
-            pkt->writeDataToBlock(&currCacheline.cacheBlock[0], blockSize);
+            // write data block from memory to cache structure
+            respPacket->writeDataToBlock(&currCacheline.cacheBlock[0], blockSize);
 
+            if(currCacheline.cohState == MesiState::Exclusive){
+                DPRINTF(CCache, "STATE_PrRd: Mesi[%d] got DATA from read and Invalid to Exclusive\n\n", cacheId);
+            }
+            else{
+                DPRINTF(CCache, "STATE_PrRd: Mesi[%d] got DATA from read and Invalid to Shared\n\n", cacheId);
+            }
+            
+            printDataHex(&currCacheline.cacheBlock[0], blockSize);
         }
         else{
-            DPRINTF(CCache, "Mesi[%d] storing %d in cache\n\n", cacheId, dataToWrite[0]);
+            
             currCacheline.cohState = MesiState::Modified;
             currCacheline.dirty = true;
             currCacheline.clkFlag = 1;
-            memcpy(&currCacheline.cacheBlock[0], &dataToWrite[0], blockSize);
+            // memcpy(&currCacheline.cacheBlock[0], &dataToWrite[0], blockSize);
+            // write data block from memory to cache structure
+            if(memoryFetch){
+                respPacket->writeDataToBlock(&currCacheline.cacheBlock[0], blockSize);
+            }
+            // modify
+            requestPacket->writeDataToBlock(&currCacheline.cacheBlock[0], blockSize);
+
+            DPRINTF(CCache, "STATE_PrWr: Mesi[%d] storing DATA in cache, Invalid to Modified\n\n", cacheId);
+            printDataHex(&currCacheline.cacheBlock[0], blockSize);
 
         }
     }
@@ -346,19 +428,37 @@ void MesiCache::handleCoherentMemResp(PacketPtr pkt) {
         assert(currCacheline.valid);
 
         if(isRead){
-            DPRINTF(CCache, "Mesi[%d] got data %d from read\n\n", cacheId, currCacheline.cacheBlock[0]);
+            // DPRINTF(CCache, "Mesi[%d] got data %d from read\n\n", cacheId, currCacheline.cacheBlock[0]);
+            assert(memoryFetch);
             // decide on exclusive or shared based on snoop result
-            currCacheline.cohState = (bus->sharedWire)? MesiState::Exclusive : MesiState::Shared;
+            currCacheline.cohState = (bus->sharedWire)? MesiState::Shared : MesiState::Exclusive;
+            // reset shared wire
+            bus->sharedWire = false;
             currCacheline.clkFlag = 1;
-            pkt->writeDataToBlock(&currCacheline.cacheBlock[0], blockSize);
+            respPacket->writeDataToBlock(&currCacheline.cacheBlock[0], blockSize);
+
+            if(currCacheline.cohState == MesiState::Exclusive){
+                DPRINTF(CCache, "STATE_PrRd: Mesi[%d] got DATA from read and Invalid to Exclusive\n\n", cacheId);
+            }
+            else{
+                DPRINTF(CCache, "STATE_PrRd: Mesi[%d] got DATA from read and Invalid to Shared\n\n", cacheId);
+            }
+            
+            printDataHex(&currCacheline.cacheBlock[0], blockSize);
 
         }
         else{
-            DPRINTF(CCache, "Mesi[%d] storing %d in cache\n\n", cacheId, dataToWrite[0]);
+            // DPRINTF(CCache, "Mesi[%d] storing %d in cache\n\n", cacheId, dataToWrite[0]);
             currCacheline.cohState = MesiState::Modified;
             currCacheline.dirty = true;
             currCacheline.clkFlag = 1;
-            memcpy(&currCacheline.cacheBlock[0], &dataToWrite[0], blockSize);
+            if(memoryFetch){
+                respPacket->writeDataToBlock(&currCacheline.cacheBlock[0], blockSize);
+            }
+            requestPacket->writeDataToBlock(&currCacheline.cacheBlock[0], blockSize);
+
+            DPRINTF(CCache, "STATE_PrWr: Mesi[%d] storing DATA in cache, Invalid to Modified\n\n", cacheId);
+            printDataHex(&currCacheline.cacheBlock[0], blockSize);
 
         }
 
@@ -405,8 +505,18 @@ void MesiCache::handleCoherentMemResp(PacketPtr pkt) {
     //     state = MesiState::Modified;
     // }
 
+    if(memoryFetch){
+        // if there's a memory fetch, an aligned new packet was allocated
+        // when sending to memory, need to make response using the original request to
+        // replace the aligned request
+        requestPacket->makeResponse();
+        delete respPacket;
+        respPacket = requestPacket;
+        requestPacket = nullptr;
+    }
+
     // the CPU has been waiting for a response. Send it this one.
-    sendCpuResp(pkt);
+    sendCpuResp(respPacket);
 
     // release the bus so other caches can use it
     bus->release(cacheId);
@@ -438,24 +548,23 @@ void MesiCache::handleCoherentSnoopedReq(PacketPtr pkt) {
         bus->sharedWire = true;
     }
 
-
-
     switch(currState){
 
         case MesiState::Modified:
 
             // flush
             assert(cachelinePtr->dirty);
+            // TODO: writeback data
             writeback(addr, &cachelinePtr->cacheBlock[0]);
             cachelinePtr->dirty = false;
             DPRINTF(CCache, "Mesi[%d] snoop hit! Flush modified data\n\n", cacheId);
 
             if(isRemoteRead){
-                DPRINTF(CCache, "Mesi[%d] BusRd hit! set: %d, way: %d, tag: %d, Modified to Shared\n\n", cacheId, setID, lineID, tag);
+                DPRINTF(CCache, "STATE_BusRd: Mesi[%d] BusRd hit! set: %d, way: %d, tag: %d, Modified to Shared\n\n", cacheId, setID, lineID, tag);
                 cachelinePtr->cohState = MesiState::Shared;
             }
             else{
-                DPRINTF(CCache, "Mesi[%d] BusRdx hit! set: %d, way: %d, tag: %d, Modified to Invalid\n\n", cacheId, setID, lineID, tag);
+                DPRINTF(CCache, "STATE_BusRdX: Mesi[%d] BusRdx hit! set: %d, way: %d, tag: %d, Modified to Invalid\n\n", cacheId, setID, lineID, tag);
                 cachelinePtr->cohState = MesiState::Invalid;
             }
 
@@ -464,11 +573,11 @@ void MesiCache::handleCoherentSnoopedReq(PacketPtr pkt) {
         case MesiState::Exclusive:
 
             if(isRemoteRead){
-                DPRINTF(CCache, "Mesi[%d] BusRd hit! set: %d, way: %d, tag: %d, Exclusive to Shared\n\n", cacheId, setID, lineID, tag);
+                DPRINTF(CCache, "STATE_BusRd: Mesi[%d] BusRd hit! set: %d, way: %d, tag: %d, Exclusive to Shared\n\n", cacheId, setID, lineID, tag);
                 cachelinePtr->cohState = MesiState::Shared;
             }
             else{
-                DPRINTF(CCache, "Mesi[%d] BusRdx hit! set: %d, way: %d, tag: %d, Exclusive to Invalid\n\n", cacheId, setID, lineID, tag);
+                DPRINTF(CCache, "STATE_BusRdX: Mesi[%d] BusRdx hit! set: %d, way: %d, tag: %d, Exclusive to Invalid\n\n", cacheId, setID, lineID, tag);
                 cachelinePtr->cohState = MesiState::Invalid;
             }
 
@@ -477,11 +586,11 @@ void MesiCache::handleCoherentSnoopedReq(PacketPtr pkt) {
         case MesiState::Shared:
 
             if(isRemoteRead){
-                DPRINTF(CCache, "Mesi[%d] BusRd hit! set: %d, way: %d, tag: %d, Shared keeps\n\n", cacheId, setID, lineID, tag);
+                DPRINTF(CCache, "STATE_BusRd: Mesi[%d] BusRd hit! set: %d, way: %d, tag: %d, Shared keeps\n\n", cacheId, setID, lineID, tag);
                 cachelinePtr->cohState = MesiState::Shared;
             }
             else{
-                DPRINTF(CCache, "Mesi[%d] BusRdx hit! set: %d, way: %d, tag: %d, Shared to Invalid\n\n", cacheId, setID, lineID, tag);
+                DPRINTF(CCache, "STATE_BusRdX: Mesi[%d] BusRdx hit! set: %d, way: %d, tag: %d, Shared to Invalid\n\n", cacheId, setID, lineID, tag);
                 cachelinePtr->cohState = MesiState::Invalid;
             }
 

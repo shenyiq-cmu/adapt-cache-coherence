@@ -33,6 +33,7 @@ class SerializingBus : public SimObject {
 
     std::list<std::pair<PacketPtr, bool>> memReqQueue;
     EventFunctionWrapper memReqEvent;
+    int cacheBlockSize = 32;
     void generateAlignAccess(PacketPtr pkt);
     void processMemReqEvent();
 
