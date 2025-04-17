@@ -404,11 +404,14 @@ void MesiCache::handleCoherentMemResp(PacketPtr pkt) {
                      << (int)cacheData << " (first byte access)\n";
         }
         
-        // Set state based on operation type
+        // Set state based on operation type - critical fix: don't override state for BUS_UPDATE
+        // The bug is here - we should not change the state for BUS_UPDATE responses
+        // as the state was already changed when we originally sent the BusUpd
         if (opType == BUS_UPDATE) {
-            cacheState = SHARED_MOD;
-            std::cerr << "MESI[" << cacheId << "] installed addr " << std::hex << addr 
-                     << std::dec << " in SHARED_MOD state after BusUpd\n";
+            // Don't change the state here - it was already set in handleCoherentBusGrant
+            // Just log what state we're in
+            std::cerr << "MESI[" << cacheId << "] state remains " << getStateName(cacheState) 
+                     << " after BusUpd response\n";
         } else if (opType == BUS_READ_EXCLUSIVE) {
             // For BusRdX (read for ownership), we transition to M state
             cacheState = MODIFIED;
