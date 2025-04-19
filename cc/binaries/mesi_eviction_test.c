@@ -35,7 +35,7 @@ int main(int argc, char** argv) {
         }
     } else {
         // Core 1 waits, then reads values to see if writebacks happened
-        for (volatile int i = 0; i < 10000; i++);
+        for (volatile int i = 0; i < 30000; i++);
         
         printf("Core %d: Reading values written by core 0\n", core_id);
         for (int i = 0; i < 64; i += 8) {
