@@ -17,8 +17,8 @@ int main(int argc, char** argv) {
         printf("Core 0: Initializing first set of cache lines\n");
         for (int i = 0; i < 8; i++) {
             shmem_ptr[i*32] = i;
-            printf("Core 0: Wrote %d to address 0x%x\n", 
-                   i, (unsigned int)(4096*8 + i*32));
+            printf("Core 0: Wrote %d to address 0x%x\n", i, (unsigned int)(4096*8 + i*32));
+            printf("Core 0: Address 0x%x = %d\n", (unsigned int)(4096*8 + i*32), shmem_ptr[i*32]);
         }
         
         // Let Core 1 read some values
