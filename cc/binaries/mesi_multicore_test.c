@@ -17,8 +17,8 @@ int main(int argc, char** argv) {
         // Core 1 reads some values, then modifies them
         for (volatile int i = 0; i < 5000; i++); // Wait a bit
         
-        printf("Core %d: Reading values\n", core_id);
-        for (int i = 0; i < 16; i += 2) {
+        printf("Core %d: Reading all values\n", core_id);
+        for (int i = 0; i < 16; i++) {
             printf("Value at %d: %d\n", i*16, shmem_ptr[i*16]);
         }
         
