@@ -74,6 +74,12 @@ uint64_t MesiCache::getBlkAddr(long addr){
     return ((addr >> blockOffset) << blockOffset);
 }
 
+uint64_t MesiCache::constructAddr(uint64_t tag, uint64_t set, uint64_t blkOffset){
+
+    return ((tag << (blockOffset+setBit)) | (set << blockOffset)) | blkOffset;
+
+}
+
 bool MesiCache::isHit(long addr, int &lineID) {
     // hit if tag matches and state is modified or shared
     uint64_t setID = getSet(addr);
@@ -142,7 +148,9 @@ void MesiCache::evict(long addr) {
             // write back if dirty
             if(cline.dirty){
                 assert(cline.cohState == MesiState::Modified);
-                writeback(addr, &cline.cacheBlock[0]);
+                // reconstruct address
+                uint64_t wbAddr = constructAddr(cline.tag, setID, 0);
+                writeback(wbAddr, &cline.cacheBlock[0]);
             }
 
             // need to erase from map
@@ -390,6 +398,9 @@ void MesiCache::handleCoherentMemResp(PacketPtr respPacket) {
             // write data block from memory to cache structure
             respPacket->writeDataToBlock(&currCacheline.cacheBlock[0], blockSize);
 
+            // should have data ready for the response
+            requestPacket->setDataFromBlock(&currCacheline.cacheBlock[0], blockSize);
+
             if(currCacheline.cohState == MesiState::Exclusive){
                 DPRINTF(CCache, "STATE_PrRd: Mesi[%d] got DATA from read and Invalid to Exclusive\n\n", cacheId);
             }
@@ -436,6 +447,9 @@ void MesiCache::handleCoherentMemResp(PacketPtr respPacket) {
             bus->sharedWire = false;
             currCacheline.clkFlag = 1;
             respPacket->writeDataToBlock(&currCacheline.cacheBlock[0], blockSize);
+
+            // should have data ready for the response
+            requestPacket->setDataFromBlock(&currCacheline.cacheBlock[0], blockSize);
 
             if(currCacheline.cohState == MesiState::Exclusive){
                 DPRINTF(CCache, "STATE_PrRd: Mesi[%d] got DATA from read and Invalid to Exclusive\n\n", cacheId);

@@ -17,7 +17,7 @@ system.cpu = [TimingSimpleCPU(cpu_id=i) for i in range(N)]
 
 system.serializing_bus = SerializingBus()
 # Small cache to force evictions (32-byte blocks, 4 sets, 512B total)
-system.cc = [MesiCache(cache_id=i, serializing_bus=system.serializing_bus, blockOffset=5, setBit=2, cacheSizeBit=9) for i in range(N)]
+system.cc = [MesiCache(cache_id=i, serializing_bus=system.serializing_bus, blockOffset=5, setBit=2, cacheSizeBit=10) for i in range(N)]
 
 system.membus = SystemXBar()
 system.serializing_bus.mem_side = system.membus.cpu_side_ports
