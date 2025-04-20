@@ -16,7 +16,7 @@ system.cpu = [TimingSimpleCPU(cpu_id=i) for i in range(N)]
 
 # CCs = coherent caches
 system.serializing_bus = SerializingBus()
-system.cc = [MesiCache(cache_id=i, serializing_bus=system.serializing_bus, blockOffset=3, setBit=3, cacheSizeBit=3) for i in range(N)]
+system.cc = [MesiCache(cache_id=i, serializing_bus=system.serializing_bus, blockOffset=2, setBit=0, cacheSizeBit=5) for i in range(N)]
 
 system.membus = SystemXBar()
 # system.membus.snoop_filter = NULL

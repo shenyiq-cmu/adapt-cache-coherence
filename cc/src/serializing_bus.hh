@@ -126,6 +126,11 @@ class SerializingBus : public SimObject {
         // Default to READ if not found
         return BusRd;
     }
+
+
+    void rmBusTrans(PacketPtr pkt) {
+      packetOpTypes.erase(pkt);
+    }
 };
 
 }

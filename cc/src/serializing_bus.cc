@@ -38,6 +38,7 @@ void SerializingBus::processMemReqEvent() {
     // delay processing until later when we might have a valid originator
     if (currentGranted == -1 && !memReqQueue.empty()) {
         if (!memReqEvent.scheduled()) {
+            std::cerr << "Bus: Delay Processing\n";
             schedule(memReqEvent, curTick()+100);
         }
         return;
@@ -59,19 +60,7 @@ void SerializingBus::processMemReqEvent() {
         
         // Get the operation type
         BusOperationType opType = getOperationType(pkt);
-        
-        // // For BUS_UPDATE operations, we need to make sure shared bit is set
-        // if (opType == BUS_UPDATE) {
-        //     // Ensure this is marked as a shared address
-        //     setShared(addr);
-            
-        //     // Do NOT try to modify the packet size - this causes errors
-        // } else if (isRead) {
-        //     // For read requests, clear shared status initially
-        //     // It will be set again during snooping if any cache has the line
-        //     clearShared(addr);
-        // }
-
+    
         // Send snoops to all other caches (not the originating cache)
         for (auto& it : cacheMap) {
             // Only send snoops if there's a valid originator and it's not this cache
@@ -90,7 +79,7 @@ void SerializingBus::processMemReqEvent() {
             }
         }
         else {
-            // BusUpd operations are handled locally - no assertion on packet type
+            assert(!isRead);
             
             // Make response only if needed and if there's a valid originator
             if (originator != -1) {

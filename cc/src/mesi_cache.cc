@@ -18,8 +18,6 @@ MesiCache::MesiCache(const MesiCacheParams& params)
     numLines =  cacheSize / numSets / blockSize;
 
     DPRINTF(CCache, "blocksize: %d, setsize: %d, cachsize: %d\n\n", blockSize, numLines, cacheSize);
-    // std::cerr<<"print here"<<std::endl;
-    // std::cout<<"print here"<<std::endl;
     // init cache manager
     MesiCacheMgr.resize(numSets);
     
@@ -159,9 +157,9 @@ void MesiCache::writeback(long addr, uint8_t* data){
 }
 
 void MesiCache::handleCoherentCpuReq(PacketPtr pkt) {
-    std::cerr << "Dragon[" << cacheId << "] cpu req for addr " << std::hex << pkt->getAddr() << std::dec
-              << " isRead=" << pkt->isRead() << " isWrite=" << pkt->isWrite() 
-              << " needsResponse=" << pkt->needsResponse() << "\n";
+    // std::cerr << "Dragon[" << cacheId << "] cpu req for addr " << std::hex << pkt->getAddr() << std::dec
+    //           << " isRead=" << pkt->isRead() << " isWrite=" << pkt->isWrite() 
+    //           << " needsResponse=" << pkt->needsResponse() << "\n";
     DPRINTF(CCache, "Mesi[%d] cpu req: %s\n\n", cacheId, pkt->print());
     
     blocked = true; // stop accepting new reqs from CPU until this one is done
@@ -211,7 +209,17 @@ void MesiCache::handleCoherentCpuReq(PacketPtr pkt) {
                     std::cerr << "MESI[" << cacheId << "] E→M transition with PrWr\n";
                     DPRINTF(CCache, "Mesi[%d] E→M transition for addr %#x\n", cacheId, addr);
                     currCacheline.cohState = MesiState::MODIFIED;
-                    
+                    pkt->writeDataToBlock(&currCacheline.cacheBlock[0], blockSize);
+                    currCacheline.dirty = true;
+                    currCacheline.clkFlag = 1;
+    
+                    pkt->makeResponse();
+                                    
+                    sendCpuResp(pkt);
+    
+                    blocked = false;
+
+                    break;
                     
                 case MesiState::MODIFIED:
                     // Update data
@@ -220,7 +228,7 @@ void MesiCache::handleCoherentCpuReq(PacketPtr pkt) {
                     DPRINTF(CCache, "Mesi[%d] M→M transition for addr %#x\n", cacheId, addr);
 
                     pkt->writeDataToBlock(&currCacheline.cacheBlock[0], blockSize);
-                    currCacheline.dirty = true;
+                    assert(currCacheline.dirty == true);
                     currCacheline.clkFlag = 1;
     
                     pkt->makeResponse();
@@ -359,11 +367,11 @@ void MesiCache::handleCoherentMemResp(PacketPtr respPacket) {
     //           << " isResponse=" << pkt->isResponse() << " needsResponse=" << pkt->needsResponse() << "\n";
     DPRINTF(CCache, "Mesi[%d] mem resp: %s\n", cacheId, respPacket->print());
     
-    // Check for reentrant call
-    if (handling_memory_response) {
-        std::cerr << "MESI[" << cacheId << "] WARNING: Reentrant memory response handling detected\n";
-        return;
-    }
+    // // Check for reentrant call
+    // if (handling_memory_response) {
+    //     std::cerr << "MESI[" << cacheId << "] WARNING: Reentrant memory response handling detected\n";
+    //     return;
+    // }
     
     // Set flag to prevent reentrance
     handling_memory_response = true;
@@ -393,9 +401,16 @@ void MesiCache::handleCoherentMemResp(PacketPtr respPacket) {
 
         if(currCacheline.cohState == MesiState::SHARED_CLEAN){
             // print trans info
+            if(bus->sharedWire)
+                DPRINTF(CCache, "Mesi[%d] Sc→Sm transition for addr %#x\n", cacheId, addr);
+            else
+                DPRINTF(CCache, "Mesi[%d] Sc→M transition for addr %#x\n", cacheId, addr);
         }
         else{
-
+            if(bus->sharedWire)
+                DPRINTF(CCache, "Mesi[%d] Sm→Sm transition for addr %#x\n", cacheId, addr);
+            else
+                DPRINTF(CCache, "Mesi[%d] Sm→M transition for addr %#x\n", cacheId, addr);
         }
         
         // BusOperationType opType = bus->getOperationType(pkt);
@@ -462,10 +477,10 @@ void MesiCache::handleCoherentMemResp(PacketPtr respPacket) {
         requestPacket->writeDataToBlock(&currCacheline.cacheBlock[0], blockSize);
 
         if(currCacheline.cohState == MesiState::MODIFIED){
-            DPRINTF(CCache, "STATE_PrWr Miss: Dragon[%d] got DATA from read and Invalid to Modified\n\n", cacheId);
+            DPRINTF(CCache, "STATE_PrWr Miss: Dragon[%d] write DATA and Invalid to Modified\n\n", cacheId);
         }
         else{
-            DPRINTF(CCache, "STATE_PrWr Miss: Dragon[%d] got DATA from read and Invalid to Shared Mod\n\n", cacheId);
+            DPRINTF(CCache, "STATE_PrWr Miss: Dragon[%d] write DATA and Invalid to Shared Mod\n\n", cacheId);
         }
         printDataHex(&currCacheline.cacheBlock[0], blockSize);
 
@@ -597,6 +612,7 @@ void MesiCache::handleCoherentSnoopedReq(PacketPtr pkt) {
     }
 
     // erase busop map
+    bus->rmBusTrans(pkt);
 
 }
 
