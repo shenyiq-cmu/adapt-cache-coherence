@@ -13,6 +13,26 @@ SerializingBus::SerializingBus(const SerializingBusParams& params)
       grantEvent([this](){ processGrantEvent(); }, name()),
       currentGranted(-1) {}
 
+
+void SerializingBus::generateAlignAccess(PacketPtr pkt){
+
+    // need to align memory access on block size
+    uint64_t addr = pkt->getAddr();
+    uint64_t blk_addr = pkt->getBlockAddr(cacheBlockSize);
+    uint64_t size = pkt->getSize();
+
+    std::cerr<<"create new packet to send to mem"<<std::endl;
+
+    PacketPtr newreqPacket = new Packet(pkt->req, MemCmd::ReadReq, cacheBlockSize);
+    newreqPacket->allocate();
+
+    // can not delete, still need for requestPacket
+    // delete pkt;
+
+    pkt = newreqPacket;
+    memPort.sendPacket(newreqPacket);
+}
+
 void SerializingBus::processMemReqEvent() {
     // If there's no valid originator but we have pending requests,
     // delay processing until later when we might have a valid originator
@@ -40,17 +60,17 @@ void SerializingBus::processMemReqEvent() {
         // Get the operation type
         BusOperationType opType = getOperationType(pkt);
         
-        // For BUS_UPDATE operations, we need to make sure shared bit is set
-        if (opType == BUS_UPDATE) {
-            // Ensure this is marked as a shared address
-            setShared(addr);
+        // // For BUS_UPDATE operations, we need to make sure shared bit is set
+        // if (opType == BUS_UPDATE) {
+        //     // Ensure this is marked as a shared address
+        //     setShared(addr);
             
-            // Do NOT try to modify the packet size - this causes errors
-        } else if (isRead) {
-            // For read requests, clear shared status initially
-            // It will be set again during snooping if any cache has the line
-            clearShared(addr);
-        }
+        //     // Do NOT try to modify the packet size - this causes errors
+        // } else if (isRead) {
+        //     // For read requests, clear shared status initially
+        //     // It will be set again during snooping if any cache has the line
+        //     clearShared(addr);
+        // }
 
         // Send snoops to all other caches (not the originating cache)
         for (auto& it : cacheMap) {
@@ -62,7 +82,12 @@ void SerializingBus::processMemReqEvent() {
 
         // Send to memory system or process locally based on the sendToMemory flag
         if (sendToMemory) {
-            memPort.sendPacket(pkt);
+            if(cacheMap[currentGranted]->isCacheablePacket(pkt)){
+                generateAlignAccess(pkt);
+            }
+            else{
+                memPort.sendPacket(pkt);
+            }
         }
         else {
             // BusUpd operations are handled locally - no assertion on packet type

@@ -150,7 +150,7 @@ void CoherentCacheBase::handleBusGrant() {
         handleCoherentBusGrant();
     }
     else {
-        bus->sendMemReq(requestPacket, true);
+        bus->sendMemReq(requestPacket, true, BusRd);
         requestPacket = nullptr;
     }
 }
@@ -158,7 +158,7 @@ void CoherentCacheBase::handleBusGrant() {
 // The following functions are implemented in the header with empty bodies
 // So we comment them out here to avoid redefinitions
 
-/*
+
 void CoherentCacheBase::handleCoherentCpuReq(PacketPtr pkt) {
     DPRINTF(CCache, "C[%d] cpu req: %s\n\n", cacheId, pkt->print());
     blocked = true;
@@ -177,7 +177,7 @@ void CoherentCacheBase::handleCoherentBusGrant() {
     // bus was granted, send the req to memory.
     // this send is guaranteed to succeed since the bus 
     // belongs to this cache for now
-    bus->sendMemReq(requestPacket, true);
+    bus->sendMemReq(requestPacket, true, BusRd);
     requestPacket = nullptr;
 }
 
@@ -193,6 +193,6 @@ void CoherentCacheBase::handleCoherentMemResp(PacketPtr pkt) {
 void CoherentCacheBase::handleCoherentSnoopedReq(PacketPtr pkt) {
     DPRINTF(CCache, "C[%d] snoop: %s\n\n", cacheId, pkt->print());
 }
-*/
+
 
 }

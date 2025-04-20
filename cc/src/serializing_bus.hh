@@ -16,10 +16,12 @@ class CoherentCacheBase;
 
 // Define bus operation types
 enum BusOperationType {
-    BUS_READ = 0,           // BusRd - read request
-    BUS_READ_EXCLUSIVE = 1, // BusRdX - read exclusive (invalidate other copies)
-    BUS_UPDATE = 2          // BusUpd - update operation for Sm state
+    BusRdX = 0, // BusRdX - read exclusive (invalidate other copies)
+    BusRd = 1,           // BusRd - read request
+    BusUpd = 2,          // BusUpd - update operation for Sm state
+    BusRdUpd = 3
 };
+
 
 class SerializingBus : public SimObject {
   private:
@@ -60,6 +62,7 @@ class SerializingBus : public SimObject {
     EventFunctionWrapper grantEvent;
     
     // Event handling functions
+    void generateAlignAccess(PacketPtr pkt);
     void processMemReqEvent();
     void processGrantEvent();
 
@@ -70,11 +73,15 @@ class SerializingBus : public SimObject {
     // The cache that currently has bus access - made public so caches can check
     int currentGranted;
 
+    int cacheBlockSize = 32;
+
+    bool sharedWire = false;
+
     SerializingBus(const SerializingBusParams& params);
 
     Port& getPort(const std::string& port_name, PortID idx = InvalidPortID) override;
 
-    void sendMemReq(PacketPtr pkt, bool sendToMemory, BusOperationType opType = BUS_READ);
+    void sendMemReq(PacketPtr pkt, bool sendToMemory, BusOperationType opType);
     void sendMemReqFunctional(PacketPtr pkt);
 
     void registerCache(int cacheId, CoherentCacheBase* cache);
@@ -96,11 +103,20 @@ class SerializingBus : public SimObject {
     // block write back
     void sendBlkWriteback(int cacheId, long addr, uint8_t *data, int blockSize);
 
-    // Methods for shared state tracking
-    bool hasShared(Addr addr) const { return sharedAddresses.find(addr) != sharedAddresses.end(); }
-    void setShared(Addr addr) { sharedAddresses.insert(addr); }
-    void clearShared(Addr addr) { sharedAddresses.erase(addr); }
+    // // Methods for shared state tracking
+    // bool hasShared(Addr addr) const { return sharedAddresses.find(addr) != sharedAddresses.end(); }
+    // void setShared(Addr addr) { sharedAddresses.insert(addr); }
+    // void clearShared(Addr addr) { sharedAddresses.erase(addr); }
     
+    
+    bool hasBusRd(int BusOp){
+      return BusOp & BusRd;
+    }
+
+    bool hasBusUpd(int BusOp){
+      return BusOp & BusUpd;
+    }
+
     // Get operation type for a packet
     BusOperationType getOperationType(PacketPtr pkt) {
         auto it = packetOpTypes.find(pkt);
@@ -108,7 +124,7 @@ class SerializingBus : public SimObject {
             return it->second;
         }
         // Default to READ if not found
-        return BUS_READ;
+        return BusRd;
     }
 };
 

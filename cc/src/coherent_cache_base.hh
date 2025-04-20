@@ -4,82 +4,76 @@
 #include "params/CoherentCacheBase.hh"
 #include "sim/sim_object.hh"
 
+#include "src_740/serializing_bus.hh"
+
+#include <list>
+
 namespace gem5 {
 
-// Forward declaration
 class SerializingBus;
 
 class CoherentCacheBase : public SimObject {
-  protected:
+   public:
     class CpuSidePort : public ResponsePort {
-      private:
-        CoherentCacheBase* owner;
-        PacketPtr blockedPacket;
-        bool needRetry;
+       public:
+        CoherentCacheBase *owner;
+        PacketPtr blockedPacket = nullptr;
+        bool needRetry = false;
 
-      public:
-        CpuSidePort(const std::string& name, CoherentCacheBase* owner)
-            : ResponsePort(name, owner),
-              owner(owner),
-              blockedPacket(nullptr),
-              needRetry(false) {}
+        CpuSidePort(const std::string &name, CoherentCacheBase *owner)
+            : ResponsePort(name, owner), owner(owner) {}
 
+        AddrRangeList getAddrRanges() const override;
         void sendPacket(PacketPtr pkt);
         void trySendRetry();
 
-        AddrRangeList getAddrRanges() const override;
+        Tick recvAtomic(PacketPtr pkt) override { panic("recvAtomic unimpl."); }
         void recvFunctional(PacketPtr pkt) override;
         bool recvTimingReq(PacketPtr pkt) override;
         void recvRespRetry() override;
-        
-        // Add implementation for pure virtual function
-        Tick recvAtomic(PacketPtr pkt) override {
-            // In a timing-based model, atomic accesses aren't really used
-            // This is just a placeholder that returns a fixed delay
-            return 1;
-        }
     };
 
     CpuSidePort cpuPort;
-    const int cacheId;
-    std::list<PacketPtr> cpuRespQueue;
-    bool blocked;
-    PacketPtr requestPacket;
+
+    int cacheId = 0;
+    bool blocked = false;
+
+    // bus connected to other caches and memory
     SerializingBus* bus;
 
+    // send CPU responses asynchronously
+    std::list<PacketPtr> cpuRespQueue;
     EventFunctionWrapper cpuRespEvent;
-
-    bool isCacheablePacket(PacketPtr pkt);
-
     void processCpuResp();
+    void sendCpuResp(PacketPtr pkt);
 
-  public:
-    CoherentCacheBase(const CoherentCacheBaseParams& params);
+    PacketPtr requestPacket = nullptr;
 
-    void init() override;
+    CoherentCacheBase(const CoherentCacheBaseParams &params);
 
-    Port& getPort(const std::string& port_name,
+    Port &getPort(const std::string &port_name,
                   PortID idx = InvalidPortID) override;
+
+    AddrRangeList getAddrRanges() const;
+    void init() override;
 
     void sendRangeChange();
 
-    void sendCpuResp(PacketPtr pkt);
-
-    AddrRangeList getAddrRanges() const;
-
-    void handleFunctional(PacketPtr pkt);
 
     bool handleRequest(PacketPtr pkt);
     bool handleResponse(PacketPtr pkt);
+    void handleFunctional(PacketPtr pkt);
 
-    void handleSnoopedReq(PacketPtr pkt);
+    bool isCacheablePacket(PacketPtr pkt);
+
     void handleBusGrant();
-    
-    // Make these non-pure virtual by providing default empty implementations
-    virtual void handleCoherentCpuReq(PacketPtr pkt) {}
-    virtual void handleCoherentBusGrant() {}
-    virtual void handleCoherentMemResp(PacketPtr pkt) {}
-    virtual void handleCoherentSnoopedReq(PacketPtr pkt) {}
-};
+    void handleSnoopedReq(PacketPtr pkt);
 
+    virtual void handleCoherentCpuReq(PacketPtr pkt);
+    virtual void handleCoherentBusGrant();
+    virtual void handleCoherentMemResp(PacketPtr pkt);
+    virtual void handleCoherentSnoopedReq(PacketPtr pkt);
+
+    virtual ~CoherentCacheBase() {}
+};
 }
