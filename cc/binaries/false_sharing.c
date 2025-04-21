@@ -22,7 +22,7 @@ int main(int argc, char** argv) {
     
     // Calculate which element this core will access
     // Place cores on same cache line to force false sharing
-    int my_offset = core_id * 16;
+    int my_offset = core_id * 8;
     int sum = 0;
     
     // Each core updates its element many times
