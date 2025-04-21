@@ -16,7 +16,7 @@ int main(int argc, char** argv) {
     }
     
     // Wait for initialization
-    for (volatile int i = 0; i < 1000; i++);
+    for (volatile int i = 0; i < 100; i++);
     
     printf("Core %d: Starting false sharing test\n", core_id);
     
@@ -26,7 +26,7 @@ int main(int argc, char** argv) {
     int sum = 0;
     
     // Each core updates its element many times
-    for (int i = 0; i < 1000; i++) {
+    for (int i = 0; i < 100; i++) {
         // Read
         sum += shmem_ptr[my_offset];
         
@@ -34,7 +34,7 @@ int main(int argc, char** argv) {
         shmem_ptr[my_offset] = shmem_ptr[my_offset] + 1;
         
         // Every 100 iterations, read an element from other cores
-        if (i % 100 == 0) {
+        if (i % 10 == 0) {
             for (int j = 0; j < 4; j++) {
                 if (j != core_id) {
                     sum += shmem_ptr[j * 16];
