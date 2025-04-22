@@ -66,6 +66,12 @@ uint64_t DragonCache::getBlkAddr(long addr){
     return ((addr >> blockOffset) << blockOffset);
 }
 
+uint64_t DragonCache::constructAddr(uint64_t tag, uint64_t set, uint64_t blkOffset){
+ 
+    return ((tag << (blockOffset+setBit)) | (set << blockOffset)) | blkOffset;
+
+}
+
 bool DragonCache::isHit(long addr, int &lineID) {
     // hit if tag matches and state is modified or shared
     uint64_t setID = getSet(addr);
@@ -134,7 +140,8 @@ void DragonCache::evict(long addr) {
             // write back if dirty
             if(cline.dirty){
                 assert(cline.cohState == DragonState::MODIFIED || cline.cohState == DragonState::SHARED_MOD);
-                writeback(addr, &cline.cacheBlock[0]);
+                uint64_t wbAddr = constructAddr(cline.tag, setID, 0);
+                writeback(wbAddr, &cline.cacheBlock[0]);
             }
 
             // need to erase from map
@@ -203,14 +210,14 @@ void DragonCache::handleCoherentCpuReq(PacketPtr pkt) {
 
         } else if (isWrite) {
             // Write hit
-            std::cerr << "dragon[" << cacheId << "] write hit in state " << " (" << getStateName(currCacheline.cohState) << ")\n";
+            // std::cerr << "dragon[" << cacheId << "] write hit in state " << " (" << getStateName(currCacheline.cohState) << ")\n";
             DPRINTF(CCache, "dragon[%d] write hit in state %d\n", cacheId, (int)currCacheline.cohState);
             
             switch (currCacheline.cohState) {
                 case DragonState::EXCLUSIVE:
                     // E → M on write (PrWr) - no changes needed
-                    std::cerr << "dragon[" << cacheId << "] E→M transition with PrWr\n";
-                    DPRINTF(CCache, "dragon[%d] E→M transition for addr %#x\n", cacheId, addr);
+                    // std::cerr << "dragon[" << cacheId << "] E→M transition with PrWr\n";
+                    DPRINTF(CCache, "STATE_PrWr: dragon[%d] upgrade from Exclusive to Modified for addr %#x\n", cacheId, addr);
                     currCacheline.cohState = DragonState::MODIFIED;
                     pkt->writeDataToBlock(&currCacheline.cacheBlock[0], blockSize);
                     currCacheline.dirty = true;
@@ -227,8 +234,8 @@ void DragonCache::handleCoherentCpuReq(PacketPtr pkt) {
                 case DragonState::MODIFIED:
                     // Update data
 
-                    std::cerr << "dragon[" << cacheId << "] M→M transition with PrWr\n";
-                    DPRINTF(CCache, "dragon[%d] M→M transition for addr %#x\n", cacheId, addr);
+                    // std::cerr << "dragon[" << cacheId << "] M→M transition with PrWr\n";
+                    DPRINTF(CCache, "STATE_PrWr: dragon[%d] stay in Modified for addr %#x\n", cacheId, addr);
 
                     pkt->writeDataToBlock(&currCacheline.cacheBlock[0], blockSize);
                     assert(currCacheline.dirty == true);
@@ -267,8 +274,8 @@ void DragonCache::handleCoherentCpuReq(PacketPtr pkt) {
         }
     } else {
         // Cache miss handling 
-        std::cerr << "dragon[" << cacheId << "] " << (isRead ? "read" : "write") 
-                 << " miss for addr " << std::hex << addr << std::dec << "\n";
+       // std::cerr << "dragon[" << cacheId << "] " << (isRead ? "read" : "write") 
+        //         << " miss for addr " << std::hex << addr << std::dec << "\n";
         DPRINTF(CCache, "dragon[%d] %s miss for addr %#x\n", 
                 cacheId, isRead ? "read" : "write", addr);
         
@@ -285,7 +292,7 @@ void DragonCache::handleCoherentCpuReq(PacketPtr pkt) {
 }
 
 void DragonCache::handleCoherentBusGrant() {
-    std::cerr << "dragon[" << cacheId << "] bus granted\n";
+    // std::cerr << "dragon[" << cacheId << "] bus granted\n";
     DPRINTF(CCache, "dragon[%d] bus granted\n\n", cacheId);
     
     assert(requestPacket != nullptr);
@@ -313,7 +320,7 @@ void DragonCache::handleCoherentBusGrant() {
 
         if (currCacheline.cohState == DragonState::SHARED_CLEAN) {
             // Sc → Sm transition via PrWr(S')
-            std::cerr << "dragon[" << cacheId << "] in Sc broadcast BudUpd on write\n";
+            // std::cerr << "dragon[" << cacheId << "] in Sc broadcast BudUpd on write\n";
             DPRINTF(CCache, "dragon[%d] in Sc broadcast BusUpd on write for addr %#x\n", 
                     cacheId, addr);
             
@@ -322,7 +329,7 @@ void DragonCache::handleCoherentBusGrant() {
             
         }
         else if (currCacheline.cohState == DragonState::SHARED_MOD) {
-            std::cerr << "dragon[" << cacheId << "] in Sm broadcast BudUpd on write\n";
+            // std::cerr << "dragon[" << cacheId << "] in Sm broadcast BudUpd on write\n";
             DPRINTF(CCache, "dragon[%d] in Sm broadcast BusUpd on write for addr %#x\n", 
                     cacheId, addr);
             
@@ -334,8 +341,8 @@ void DragonCache::handleCoherentBusGrant() {
         // Cache miss - need to fetch from memory
         if (isRead) {
             // PrRdMiss - read miss, may get data from memory or other cache
-            std::cerr << "dragon[" << cacheId << "] sending BusRd\n";
-            DPRINTF(CCache, "dragon[%d] sending BusRd for addr %#x\n", 
+            // std::cerr << "dragon[" << cacheId << "] sending BusRd\n";
+            DPRINTF(CCache, "dragon[%d] read miss broadcast BusRd for addr %#x\n", 
                     cacheId, addr);
             
             // This will be handled in handleCoherentMemResp
@@ -344,8 +351,8 @@ void DragonCache::handleCoherentBusGrant() {
             // requestPacket = nullptr;
         } else if (isWrite) {
             // PrWrMiss + transition to M - read for ownership (RFO)
-            std::cerr << "dragon[" << cacheId << "] sending PrWrMiss for write (RFO)\n";
-            DPRINTF(CCache, "dragon[%d] sending PrWrMiss for write (RFO) addr %#x\n", 
+            // std::cerr << "dragon[" << cacheId << "] sending PrWrMiss for write (RFO)\n";
+            DPRINTF(CCache, "dragon[%d] write miss broadcast BusRd for addr %#x\n", 
                     cacheId, addr);
             
             // This will be handled in handleCoherentMemResp
@@ -405,15 +412,15 @@ void DragonCache::handleCoherentMemResp(PacketPtr respPacket) {
         if(currCacheline.cohState == DragonState::SHARED_CLEAN){
             // print trans info
             if(bus->sharedWire)
-                DPRINTF(CCache, "dragon[%d] Sc→Sm transition for addr %#x\n", cacheId, addr);
+                DPRINTF(CCache, "STATE_PrWr: dragon[%d] storing DATA at addr %#x, Shared_Clean to Shared_Mod\n", cacheId, addr);
             else
-                DPRINTF(CCache, "dragon[%d] Sc→M transition for addr %#x\n", cacheId, addr);
+                DPRINTF(CCache, "STATE_PrWr: dragon[%d] storing DATA at addr %#x, Shared_Clean to Modified\n", cacheId, addr);
         }
         else{
             if(bus->sharedWire)
-                DPRINTF(CCache, "dragon[%d] Sm→Sm transition for addr %#x\n", cacheId, addr);
+                DPRINTF(CCache, "STATE_PrWr: dragon[%d] storing DATA at addr %#x, stay in Shared_Mod\n", cacheId, addr);
             else
-                DPRINTF(CCache, "dragon[%d] Sm→M transition for addr %#x\n", cacheId, addr);
+                DPRINTF(CCache, "STATE_PrWr: dragon[%d] storing DATA at addr %#x, Shared_Mod to Modified\n", cacheId, addr);
         }
         
         // BusOperationType opType = bus->getOperationType(pkt);
@@ -423,13 +430,15 @@ void DragonCache::handleCoherentMemResp(PacketPtr respPacket) {
         currCacheline.clkFlag = 1;
         // can only modify parts that requested
         requestPacket->writeDataToBlock(&currCacheline.cacheBlock[0], blockSize);
+
+        printDataHex(&currCacheline.cacheBlock[0], blockSize);
         
         // Send response to CPU
         sendCpuResp(respPacket);
         
         // Release the bus since we're done with memory operation
         if (cacheId == bus->currentGranted) {
-            std::cerr << "dragon[" << cacheId << "] releasing bus after memory response\n";
+            //std::cerr << "dragon[" << cacheId << "] releasing bus after memory response\n";
             bus->release(cacheId);
         }
         blocked = false;
@@ -456,6 +465,7 @@ void DragonCache::handleCoherentMemResp(PacketPtr respPacket) {
         bus->sharedWire = false;
         currCacheline.clkFlag = 1;
         respPacket->writeDataToBlock(&currCacheline.cacheBlock[0], blockSize);
+        requestPacket->setDataFromBlock(&currCacheline.cacheBlock[0], blockSize);
 
         if(currCacheline.cohState == DragonState::EXCLUSIVE){
             DPRINTF(CCache, "STATE_PrRd Miss: Dragon[%d] got DATA from read and Invalid to Exclusive\n\n", cacheId);
@@ -483,7 +493,7 @@ void DragonCache::handleCoherentMemResp(PacketPtr respPacket) {
             DPRINTF(CCache, "STATE_PrWr Miss: Dragon[%d] write DATA and Invalid to Modified\n\n", cacheId);
         }
         else{
-            DPRINTF(CCache, "STATE_PrWr Miss: Dragon[%d] write DATA and Invalid to Shared Mod\n\n", cacheId);
+            DPRINTF(CCache, "STATE_PrWr Miss: Dragon[%d] write DATA and Invalid to Shared_Mod\n\n", cacheId);
         }
         printDataHex(&currCacheline.cacheBlock[0], blockSize);
 
@@ -552,7 +562,7 @@ void DragonCache::handleCoherentSnoopedReq(PacketPtr pkt) {
             DPRINTF(CCache, "dragon[%d] snoop hit! Flush modified data\n\n", cacheId);
 
             cachelinePtr->cohState = DragonState::SHARED_MOD;
-            DPRINTF(CCache, "STATE_BusRd: dragon[%d] BusRd hit! set: %d, way: %d, tag: %d, Modified to Sm\n\n", cacheId, setID, lineID, tag);
+            DPRINTF(CCache, "STATE_BusRd: dragon[%d] BusRd hit! set: %d, way: %d, tag: %d, Modified to Shared_Mod\n\n", cacheId, setID, lineID, tag);
 
             if(!bus->hasBusUpd(opType)){
                 break;
@@ -575,7 +585,7 @@ void DragonCache::handleCoherentSnoopedReq(PacketPtr pkt) {
                 assert(pkt->isWrite());
                 pkt->writeDataToBlock(&cachelinePtr->cacheBlock[0], blockSize);
                 cachelinePtr->cohState = DragonState::SHARED_CLEAN;
-                DPRINTF(CCache, "STATE_BusUpd: dragon[%d] BusUpd hit! set: %d, way: %d, tag: %d, Sm to Sc\n\n", cacheId, setID, lineID, tag);
+                DPRINTF(CCache, "STATE_BusUpd: dragon[%d] BusUpd hit! set: %d, way: %d, tag: %d, Shared_Mod to Shared_Clean\n\n", cacheId, setID, lineID, tag);
             }
 
             break;
@@ -586,7 +596,7 @@ void DragonCache::handleCoherentSnoopedReq(PacketPtr pkt) {
             assert(bus->hasBusRd(opType));
 
             cachelinePtr->cohState = DragonState::SHARED_CLEAN;
-            DPRINTF(CCache, "STATE_BusRd: dragon[%d] BusRd hit! set: %d, way: %d, tag: %d, Exclusive to Sc\n\n", cacheId, setID, lineID, tag);
+            DPRINTF(CCache, "STATE_BusRd: dragon[%d] BusRd hit! set: %d, way: %d, tag: %d, Exclusive to Shared_Clean\n\n", cacheId, setID, lineID, tag);
 
             if(!bus->hasBusUpd(opType)){
                 break;
@@ -599,7 +609,7 @@ void DragonCache::handleCoherentSnoopedReq(PacketPtr pkt) {
             if(bus->hasBusUpd(opType)){
                 assert(pkt->isWrite());
                 pkt->writeDataToBlock(&cachelinePtr->cacheBlock[0], blockSize);
-                DPRINTF(CCache, "STATE_BusUpd: dragon[%d] BusUpd hit! set: %d, way: %d, tag: %d, Sc to Sc\n\n", cacheId, setID, lineID, tag);
+                DPRINTF(CCache, "STATE_BusUpd: dragon[%d] BusUpd hit! set: %d, way: %d, tag: %d, stay in Shared_Clean\n\n", cacheId, setID, lineID, tag);
             }
 
             break;
@@ -614,8 +624,8 @@ void DragonCache::handleCoherentSnoopedReq(PacketPtr pkt) {
 
     }
 
-    // erase busop map
-    bus->rmBusTrans(pkt);
+    // // erase busop map
+    // bus->rmBusTrans(pkt);
 
 }
 

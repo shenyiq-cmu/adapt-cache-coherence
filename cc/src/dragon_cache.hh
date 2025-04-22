@@ -79,6 +79,7 @@ public:
     void writeback(long addr, uint8_t* data);
     void printDataHex(uint8_t* data, int length);
     uint64_t getBlkAddr(long addr);
+    uint64_t constructAddr(uint64_t tag, uint64_t set, uint64_t blkOffset);
 
     DragonCache(const DragonCacheParams &params);
 

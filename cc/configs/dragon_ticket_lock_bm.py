@@ -18,7 +18,7 @@ system.cpu = [TimingSimpleCPU(cpu_id=i) for i in range(N)]
 
 # Configure caches for Dragon protocol with 1024 byte size
 system.serializing_bus = SerializingBus()
-system.cc = [MesiCache(cache_id=i, 
+system.cc = [DragonCache(cache_id=i, 
                         serializing_bus=system.serializing_bus,
                         blockOffset=2,   
                         setBit=4,        # 16 sets

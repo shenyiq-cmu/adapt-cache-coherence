@@ -58,7 +58,7 @@ void CoherentCacheBase::sendRangeChange() { cpuPort.sendRangeChange(); }
 
 bool CoherentCacheBase::isCacheablePacket(PacketPtr pkt) {
     auto addr = pkt->getAddr();
-    return (addr >= 0x8000 && addr < 0x8100);
+    return (addr >= 0x8000 && addr < 0x9000);
 }
 
 bool CoherentCacheBase::handleRequest(PacketPtr pkt) {
