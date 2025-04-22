@@ -191,6 +191,9 @@ void DragonCache::handleCoherentCpuReq(PacketPtr pkt) {
 
         assert(pkt->needsResponse());
 
+        localStats.hitCount++;
+        DPRINTF(CCache, "dragon[%d] cache hit #%d\n", cacheId, localStats.hitCount);
+
         if (isRead) {
             // no state change or snoop needed, reply now
             pkt->makeResponse();
@@ -274,12 +277,18 @@ void DragonCache::handleCoherentCpuReq(PacketPtr pkt) {
         }
     } else {
         // Cache miss handling 
+
+        // stats collection start
+        localStats.missCount++;
+
        // std::cerr << "dragon[" << cacheId << "] " << (isRead ? "read" : "write") 
         //         << " miss for addr " << std::hex << addr << std::dec << "\n";
-        DPRINTF(CCache, "dragon[%d] %s miss for addr %#x\n", 
-                cacheId, isRead ? "read" : "write", addr);
+        DPRINTF(CCache, "dragon[%d] %s miss #%d for addr %#x\n", 
+                cacheId, isRead ? "read" : "write", localStats.missCount, addr);
         
         // For both read and write misses, we need to get bus access
+
+
 
         requestPacket = pkt;
 
@@ -293,10 +302,16 @@ void DragonCache::handleCoherentCpuReq(PacketPtr pkt) {
 
 void DragonCache::handleCoherentBusGrant() {
     // std::cerr << "dragon[" << cacheId << "] bus granted\n";
-    DPRINTF(CCache, "dragon[%d] bus granted\n\n", cacheId);
+
     
     assert(requestPacket != nullptr);
     assert(cacheId == bus->currentGranted);
+
+    // stats collect start
+    bus->stats.transCount++;
+
+    DPRINTF(CCache, "dragon[%d] bus granted, transaction #%d\n\n", cacheId, bus->stats.transCount);
+
     
     uint64_t addr = requestPacket->getAddr();
     uint64_t blk_addr = requestPacket->getBlockAddr(blockSize);

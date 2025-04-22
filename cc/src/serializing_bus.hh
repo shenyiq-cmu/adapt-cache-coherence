@@ -22,6 +22,10 @@ enum BusOperationType {
     BusRdUpd = 3
 };
 
+typedef struct BUSStats{
+  int transCount;
+} BusStats;
+
 
 class SerializingBus : public SimObject {
   private:
@@ -77,6 +81,10 @@ class SerializingBus : public SimObject {
 
     bool sharedWire = false;
 
+    // statistics
+
+    BusStats stats = {0};
+
     SerializingBus(const SerializingBusParams& params);
 
     Port& getPort(const std::string& port_name, PortID idx = InvalidPortID) override;
@@ -106,7 +114,8 @@ class SerializingBus : public SimObject {
     // // Methods for shared state tracking
     // bool hasShared(Addr addr) const { return sharedAddresses.find(addr) != sharedAddresses.end(); }
     // void setShared(Addr addr) { sharedAddresses.insert(addr); }
-    // void clearShared(Addr addr) { sharedAddresses.erase(addr); }
+    // void clearShared(Addr addr) { sharedAddresses.erase(addr); 
+
     
     
     bool hasBusRd(int BusOp){
