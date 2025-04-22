@@ -173,7 +173,8 @@ void SerializingBus::sendMemReqFunctional(PacketPtr pkt) {
 
 void SerializingBus::sendMemReq(PacketPtr pkt, bool sendToMemory, BusOperationType opType) {
     // Store the operation type
-    packetOpTypes[pkt] = opType;
+    // packetOpTypes[pkt] = opType;
+    currBusOp = opType;
     
     // Store the request in the queue with the current granted cache as originator
     memReqQueue.push_back(std::make_tuple(pkt, sendToMemory, currentGranted));

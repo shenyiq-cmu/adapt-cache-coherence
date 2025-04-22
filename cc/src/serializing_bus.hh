@@ -55,8 +55,8 @@ class SerializingBus : public SimObject {
     // List of pending memory requests (packet, sendToMemory, originator)
     std::list<std::tuple<PacketPtr, bool, int>> memReqQueue;
 
-    // Track the operation type for each packet
-    std::map<PacketPtr, BusOperationType> packetOpTypes;
+    // // Track the operation type for each packet
+    // std::map<PacketPtr, BusOperationType> packetOpTypes;
 
     // List of caches waiting for bus
     std::list<int> busRequestQueue;
@@ -71,7 +71,7 @@ class SerializingBus : public SimObject {
     void processGrantEvent();
 
     // Set of addresses currently in shared state
-    std::unordered_set<Addr> sharedAddresses;
+    // std::unordered_set<Addr> sharedAddresses;
 
   public:
     // The cache that currently has bus access - made public so caches can check
@@ -80,6 +80,8 @@ class SerializingBus : public SimObject {
     int cacheBlockSize = 32;
 
     bool sharedWire = false;
+
+    BusOperationType currBusOp = BusRd;
 
     // statistics
 
@@ -128,18 +130,19 @@ class SerializingBus : public SimObject {
 
     // Get operation type for a packet
     BusOperationType getOperationType(PacketPtr pkt) {
-        auto it = packetOpTypes.find(pkt);
-        if (it != packetOpTypes.end()) {
-            return it->second;
-        }
-        // Default to READ if not found
-        return BusRd;
+        // auto it = packetOpTypes.find(pkt);
+        // if (it != packetOpTypes.end()) {
+        //     return it->second;
+        // }
+        // // Default to READ if not found
+        // return BusRd;
+        return currBusOp;
     }
 
 
-    void rmBusTrans(PacketPtr pkt) {
-      packetOpTypes.erase(pkt);
-    }
+    // void rmBusTrans(PacketPtr pkt) {
+    //   packetOpTypes.erase(pkt);
+    // }
 };
 
 }

@@ -612,7 +612,7 @@ void MesiCache::handleCoherentSnoopedReq(PacketPtr pkt) {
     }
 
     // erase busop map
-    bus->rmBusTrans(pkt);
+    //bus->rmBusTrans(pkt);
 
 }
 
