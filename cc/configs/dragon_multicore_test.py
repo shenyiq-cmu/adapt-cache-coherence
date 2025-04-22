@@ -27,7 +27,7 @@ system.serializing_bus = SerializingBus()
 
 # Configure caches for multicore testing
 # blockOffset=5 (32-byte blocks), setBit=3 (8 sets), cacheSizeBit=11 (2KB total)
-system.cc = [MesiCache(cache_id=i, serializing_bus=system.serializing_bus, 
+system.cc = [DragonCache(cache_id=i, serializing_bus=system.serializing_bus, 
                      blockOffset=5, setBit=3, cacheSizeBit=11) for i in range(num_cores)]
 
 # Configure memory hierarchy

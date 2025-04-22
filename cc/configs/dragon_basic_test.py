@@ -20,7 +20,7 @@ system.serializing_bus = SerializingBus()
 
 # Configure caches with appropriate parameters
 # blockOffset=5 (32-byte blocks), setBit=2 (4 sets), cacheSizeBit=10 (1KB total)
-system.cc = [MesiCache(cache_id=i, serializing_bus=system.serializing_bus, 
+system.cc = [DragonCache(cache_id=i, serializing_bus=system.serializing_bus, 
                       blockOffset=5, setBit=2, cacheSizeBit=10) for i in range(N)]
 
 # Configure memory hierarchy

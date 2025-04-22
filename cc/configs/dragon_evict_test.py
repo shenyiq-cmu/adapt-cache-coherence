@@ -20,7 +20,7 @@ system.serializing_bus = SerializingBus()
 # Configure caches with VERY small size to force evictions
 # blockOffset=5 (32-byte blocks), setBit=1 (2 sets), cacheSizeBit=8 (256 bytes total)
 # This tiny cache will have only 2 sets × 4 ways = 8 total cache lines
-system.cc = [MesiCache(cache_id=i, serializing_bus=system.serializing_bus, 
+system.cc = [DragonCache(cache_id=i, serializing_bus=system.serializing_bus, 
                       blockOffset=5, setBit=1, cacheSizeBit=8) for i in range(N)]
 
 # Configure memory hierarchy
