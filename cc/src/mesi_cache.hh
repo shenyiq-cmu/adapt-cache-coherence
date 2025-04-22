@@ -4,7 +4,7 @@
 #include "params/MesiCache.hh"
 #include "sim/sim_object.hh"
 
-#include "src_740/coherent_cache_base.hh"
+#include "coherent_cache_base.hh"
 #include "src_740/serializing_bus.hh"
 
 #include <list>
@@ -13,24 +13,18 @@
 
 namespace gem5 {
 
-// Define the cache states
-enum class MesiState {
-    INVALID = 0,
-    EXCLUSIVE = 1,    // E: Exclusive clean
-    MODIFIED = 2,     // M: Modified (dirty)
-    SHARED_CLEAN = 3, // Sc: Shared clean
-    SHARED_MOD = 4    // Sm: Shared modified
-};
-
 class MesiCache : public CoherentCacheBase {
-private:
-    // // Single address cache
-    // bool valid;             // Whether the cache line is valid
-    // Addr cachedAddr;        // The address currently in cache
-    // int cacheState;         // State of the cache line (using enum MesiState)
-    // unsigned char cacheData; // The actual data stored
+   public:
+    MesiCache(const MesiCacheParams &params);
 
-public:
+    // coherence state machine, data storage etc. here
+    enum class MesiState {
+        Invalid,
+        Modified,
+        Shared,
+        Exclusive,
+        Error
+    } state = MesiState::Invalid;
 
     typedef struct CacheLine{
         std::vector<uint8_t> cacheBlock;
@@ -79,26 +73,11 @@ public:
     void writeback(long addr, uint8_t* data);
     void printDataHex(uint8_t* data, int length);
     uint64_t getBlkAddr(long addr);
-
-    MesiCache(const MesiCacheParams &params);
-
-    // coherence state machine implementation
+    uint64_t constructAddr(uint64_t tag, uint64_t set, uint64_t blkOffset);
+    
     void handleCoherentCpuReq(PacketPtr pkt) override;
     void handleCoherentBusGrant() override;
-    void handleCoherentMemResp(PacketPtr respPacket) override;
+    void handleCoherentMemResp(PacketPtr pkt) override;
     void handleCoherentSnoopedReq(PacketPtr pkt) override;
-    
-    // Helper method to get state name for logging
-    const char* getStateName(MesiState state) {
-        switch (state) {
-            case MesiState::INVALID: return "INVALID";
-            case MesiState::EXCLUSIVE: return "EXCLUSIVE";
-            case MesiState::MODIFIED: return "MODIFIED";
-            case MesiState::SHARED_CLEAN: return "SHARED_CLEAN";
-            case MesiState::SHARED_MOD: return "SHARED_MOD";
-            default: return "UNKNOWN";
-        }
-    }
 };
-
 }

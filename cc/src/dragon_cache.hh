@@ -49,11 +49,6 @@ public:
         int clkPtr;
     } cacheSetMgr;
 
-    typedef struct CACHEStats{
-        int missCount;
-        int hitCount;
-    } CacheStats;
-
     // // single entry cache = all bits are used for tag
     // unsigned char data = 0;
     // long tag = 0;
@@ -75,8 +70,6 @@ public:
     int numLines;
 
     std::vector<cacheSetMgr> DragonCacheMgr;
-
-    CacheStats localStats = {0, 0};
 
     uint64_t getTag(long addr);
     uint64_t getSet(long addr);

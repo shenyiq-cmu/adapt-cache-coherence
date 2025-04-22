@@ -21,7 +21,7 @@ void SerializingBus::generateAlignAccess(PacketPtr pkt){
     uint64_t blk_addr = pkt->getBlockAddr(cacheBlockSize);
     uint64_t size = pkt->getSize();
 
-    std::cerr<<"create new packet to send to mem"<<std::endl;
+    // std::cerr<<"create new packet to send to mem"<<std::endl;
 
     PacketPtr newreqPacket = new Packet(pkt->req, MemCmd::ReadReq, cacheBlockSize);
     newreqPacket->allocate();

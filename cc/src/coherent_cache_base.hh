@@ -33,6 +33,14 @@ class CoherentCacheBase : public SimObject {
         void recvRespRetry() override;
     };
 
+    typedef struct CACHEStats{
+        int missCount;
+        int hitCount;
+    } CacheStats;
+
+    // cache stats struct for all caches
+    CacheStats localStats = {0, 0};
+
     CpuSidePort cpuPort;
 
     int cacheId = 0;
