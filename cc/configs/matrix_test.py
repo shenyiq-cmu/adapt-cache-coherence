@@ -20,13 +20,17 @@ system.cpu = [TimingSimpleCPU(cpu_id=i) for i in range(N)]
 # Create the Dragon cache coherence components
 system.serializing_bus = SerializingBus()
 
-# Configure Dragon caches conservatively
-system.dragon_cache = [DragonCache(
+# Configure Dragon caches with parameters optimized for matrix operations:
+# - Moderately sized caches
+# - Block size aligned with matrix access patterns
+# - Number of sets to balance capacity and associativity
+system.dragon_cache = [HybridCache(
     cache_id=i, 
     serializing_bus=system.serializing_bus, 
-    blockOffset=3,  # 8-byte blocks
-    setBit=2,       # 4 sets
-    cacheSizeBit=10 # 1KB cache (small enough to ensure we fit)
+    blockOffset=4,  # 16-byte blocks
+    setBit=0,       # 1 sets
+    cacheSizeBit=10, # 8KB cache
+    invalidThreshold = 5
 ) for i in range(N)]
 
 # Create the memory bus
@@ -65,15 +69,16 @@ for i in range(N):
 root = Root(full_system=False, system=system)
 m5.instantiate()
 
-# Map shared memory region - strictly 4KB only
+# Map shared memory region - need more space for matrices (16KB)
 for i in range(N):
-    processes[i].map(4096*8, 4096*8, 4096, cacheable=True)
+    processes[i].map(4096*8, 4096*8, 4096*2, cacheable=True)
 
+# Reset stats before simulation
+m5.stats.reset()
 
-print("Beginning simulation of Dragon protocol fixed matrix benchmark!")
+print("Beginning simulation of Dragon protocol matrix benchmark!")
 
-# Run simulation with a reasonable time limit (3 seconds at 1GHz)
-tick_limit = 3000000000
+# Run simulation without limits
 exit_event = m5.simulate()
 
 print(f"Exiting @ tick {m5.curTick()} because {exit_event.getCause()}")

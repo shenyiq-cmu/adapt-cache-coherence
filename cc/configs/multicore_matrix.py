@@ -12,7 +12,7 @@ system.mem_mode = 'timing'
 system.mem_ranges = [AddrRange('512MB')]
 
 # Number of CPU cores - can be set to 4 or 8
-N = 6  # Change to 8 if needed
+N = 4  # Change to 8 if needed
 
 # Create CPU cores
 system.cpu = [TimingSimpleCPU(cpu_id=i) for i in range(N)]
@@ -21,12 +21,12 @@ system.cpu = [TimingSimpleCPU(cpu_id=i) for i in range(N)]
 system.serializing_bus = SerializingBus()
 
 # Configure Dragon caches
-system.dragon_cache = [DragonCache(
+system.dragon_cache = [HybridCache(
     cache_id=i, 
     serializing_bus=system.serializing_bus, 
     blockOffset=4,  # 16-byte blocks
     setBit=2,       # 4 sets
-    cacheSizeBit=12 # 4KB cache
+    cacheSizeBit=10 # 4KB cache
 ) for i in range(N)]
 
 # Create the memory bus
@@ -67,7 +67,7 @@ m5.instantiate()
 
 # Map shared memory region - exactly 4KB
 for i in range(N):
-    processes[i].map(4096*8, 4096*8, 4096, cacheable=True)
+    processes[i].map(4096*8, 4096*8, 4096*2, cacheable=True)
 
 # Reset stats before simulation
 m5.stats.reset()

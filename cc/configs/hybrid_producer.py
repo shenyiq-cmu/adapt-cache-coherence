@@ -25,12 +25,13 @@ system.serializing_bus = SerializingBus()
 # - Very few sets (2)
 # - Tiny blocks (8 bytes)
 # This ensures we get continuous cache misses throughout the test
-system.dragon_cache = [DragonCache(
+system.dragon_cache = [HybridCache(
     cache_id=i, 
     serializing_bus=system.serializing_bus, 
     blockOffset=3,  # 8-byte blocks (tiny blocks generate more misses)
     setBit=1,       # 2 sets (almost guaranteed conflicts)
-    cacheSizeBit=10 # 1KB cache (extremely small)
+    cacheSizeBit=10, # 1KB cache (extremely small)
+    invalidThreshold=2 # 1KB cache (extremely small)
 ) for i in range(N)]
 
 # Create the memory bus

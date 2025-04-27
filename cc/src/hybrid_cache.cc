@@ -473,9 +473,13 @@ void HybridCache::handleCoherentMemResp(PacketPtr respPacket) {
     // if no hit, must be invalid
     // assert(lineID == NOT_EXIST);
 
-    evict(addr);
+    // need evict only when not exist
+    if(lineID == NOT_EXIST){
+        evict(addr);
 
-    lineID = allocate(addr);
+        lineID = allocate(addr);
+    }
+
     cacheLine &currCacheline = HybridCacheMgr[setID].cacheSet[lineID];
     assert(currCacheline.cohState == HybridState::INVALID);
     assert(currCacheline.valid);
@@ -621,6 +625,7 @@ void HybridCache::handleCoherentSnoopedReq(PacketPtr pkt) {
                     assert(pkt->isWrite());
                     pkt->writeDataToBlock(&cachelinePtr->cacheBlock[0], blockSize);
                     cachelinePtr->cohState = HybridState::SHARED_CLEAN;
+                    cachelinePtr->dirty = false;
                     cachelinePtr->accessSinceUpd = false;
                     DPRINTF(CCache, "STATE_BusUpd: hybrid[%d] BusUpd hit! set: %d, way: %d, tag: %d, Shared_Mod to Shared_Clean\n\n", cacheId, setID, lineID, tag);
                 }

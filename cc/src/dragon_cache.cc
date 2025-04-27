@@ -600,6 +600,7 @@ void DragonCache::handleCoherentSnoopedReq(PacketPtr pkt) {
                 assert(pkt->isWrite());
                 pkt->writeDataToBlock(&cachelinePtr->cacheBlock[0], blockSize);
                 cachelinePtr->cohState = DragonState::SHARED_CLEAN;
+                cachelinePtr->dirty = false;
                 DPRINTF(CCache, "STATE_BusUpd: dragon[%d] BusUpd hit! set: %d, way: %d, tag: %d, Shared_Mod to Shared_Clean\n\n", cacheId, setID, lineID, tag);
             }
 
