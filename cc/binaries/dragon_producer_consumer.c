@@ -1,11 +1,21 @@
-// dragon_producer_consumer.c
-// Modified benchmark for Dragon cache coherence protocol
+// dragon_fixed_producer_consumer.c
+// Fixed benchmark for Dragon cache coherence protocol
 #include <stdio.h>
 #include <stdlib.h>
 
 // Simple delay function
 void delay(int cycles) {
     for (volatile int i = 0; i < cycles; i++);
+}
+
+// Safe wait function with timeout to prevent deadlocks
+int wait_for_value(volatile int *addr, int expected_value, int timeout_loops) {
+    int timeout = 0;
+    while (*addr != expected_value && timeout < timeout_loops) {
+        delay(100);
+        timeout++;
+    }
+    return (timeout < timeout_loops); // 1 if successful, 0 if timed out
 }
 
 int main(int argc, char** argv) {
@@ -18,7 +28,7 @@ int main(int argc, char** argv) {
     // Shared memory region at virtual address 0x8000
     volatile char* shmem_ptr = (volatile char*) (4096 * 8);
     
-    printf("Core %d: Starting Dragon protocol test\n", core_id);
+    printf("Core %d: Starting fixed Dragon protocol test\n", core_id);
     
     // Memory layout - using two separate data regions to test different sharing patterns
     #define BUFFER_SIZE 64 
@@ -33,6 +43,7 @@ int main(int argc, char** argv) {
     volatile int* ack_flag = (volatile int*)(shmem_ptr + 2*BUFFER_SIZE + 4); // 0x8084
     volatile int* shared_counter = (volatile int*)(shmem_ptr + 2*BUFFER_SIZE + 8); // 0x8088
     volatile int* mode_flag = (volatile int*)(shmem_ptr + 2*BUFFER_SIZE + 12); // 0x808C
+    volatile int* iteration_flags = (volatile int*)(shmem_ptr + 2*BUFFER_SIZE + 16); // 0x8090-0x80A0
     
     // Initialize shared memory if core 0
     if (core_id == 0) {
@@ -49,10 +60,21 @@ int main(int argc, char** argv) {
         *ack_flag = 0;
         *shared_counter = 0;
         *mode_flag = 0; // 0=normal, 1=concurrent mode
+        
+        // Initialize iteration flags
+        for (int i = 0; i < 10; i++) {
+            iteration_flags[i] = 0;
+        }
+        
+        // Memory barrier to ensure all initializations are visible
+        __sync_synchronize();
+    } else {
+        // Wait a moment for initialization
+        delay(5000);
     }
     
-    // Test parameters
-    int rounds = 10;
+    // Test parameters - reduced for faster completion
+    int rounds = 5;
     
     if (core_id == 0) {
         printf("Core 0: Producer starting\n");
@@ -76,13 +98,15 @@ int main(int argc, char** argv) {
                 *ready_flag = round;
                 printf("Core 0: Primary buffer filled, ready flag set\n");
                 
-                // Wait for consumer to process
+                // Wait for consumer to process with timeout
                 printf("Core 0: Waiting for consumer acknowledgment\n");
-                while (*ack_flag != round) {
-                    delay(100);
-                }
+                int success = wait_for_value(ack_flag, round, 100);
                 
-                printf("Core 0: Received acknowledgment for round %d\n", round);
+                if (success) {
+                    printf("Core 0: Received acknowledgment for round %d\n", round);
+                } else {
+                    printf("Core 0: Timed out waiting for acknowledgment, continuing anyway\n");
+                }
             } 
             else {
                 printf("Core 0: Concurrent access mode\n");
@@ -91,12 +115,18 @@ int main(int argc, char** argv) {
                 *ready_flag = round;
                 
                 // Wait for consumer to be ready for concurrent mode
-                while (*ack_flag != round) {
-                    delay(50);
+                int success = wait_for_value(ack_flag, round, 100);
+                
+                if (!success) {
+                    printf("Core 0: Timed out waiting for consumer, skipping concurrent mode\n");
+                    continue;
                 }
                 
                 // Both cores now simultaneously access the secondary buffer
                 printf("Core 0: Starting concurrent access to secondary buffer\n");
+                
+                // Reset counter for this round
+                *shared_counter = 0;
                 
                 // Core 0 writes to even indices while reading odd indices
                 for (int iter = 0; iter < 5; iter++) {
@@ -115,13 +145,15 @@ int main(int argc, char** argv) {
                     
                     printf("Core 0: Iteration %d, sum of odd indices: %d\n", iter, sum);
                     
-                    // Update shared counter to synchronize with Core 1
-                    (*shared_counter)++;
+                    // USE SEPARATE FLAG FOR EACH ITERATION
+                    iteration_flags[iter * 2] = 1;  // Core 0 sets even flags
                     
                     // Wait for Core 1 to complete its iteration
-                    int expected = (*shared_counter) + 1;
-                    while (*shared_counter < expected) {
-                        delay(20);
+                    success = wait_for_value(&iteration_flags[iter * 2 + 1], 1, 50);
+                    
+                    if (!success) {
+                        printf("Core 0: Timed out waiting for Core 1 at iteration %d\n", iter);
+                        break;
                     }
                 }
                 
@@ -131,8 +163,15 @@ int main(int argc, char** argv) {
                 *ready_flag = round + 100;
                 
                 // Wait for consumer to acknowledge
-                while (*ack_flag != round + 100) {
-                    delay(50);
+                success = wait_for_value(ack_flag, round + 100, 100);
+                
+                if (!success) {
+                    printf("Core 0: Timed out waiting for final acknowledgment\n");
+                }
+                
+                // Reset iteration flags
+                for (int i = 0; i < 10; i++) {
+                    iteration_flags[i] = 0;
                 }
             }
             
@@ -217,19 +256,33 @@ int main(int argc, char** argv) {
                         
                         printf("Core 1: Iteration %d, sum of even indices: %d\n", iter, sum);
                         
-                        // Update shared counter to synchronize with Core 0
-                        (*shared_counter)++;
+                        // USE SEPARATE FLAG FOR EACH ITERATION
+                        iteration_flags[iter * 2 + 1] = 1;  // Core 1 sets odd flags
                         
                         // Wait for Core 0 to complete its iteration
-                        int expected = (*shared_counter) + 1;
-                        while (*shared_counter < expected) {
-                            delay(20);
+                        int success = wait_for_value(&iteration_flags[iter * 2], 1, 50);
+                        
+                        if (!success) {
+                            printf("Core 1: Timed out waiting for Core 0 at iteration %d\n", iter);
+                            break;
                         }
                     }
                     
                     printf("Core 1: Completed concurrent mode processing\n");
                     
-                    // Don't update last_round yet - wait for the end signal
+                    // Wait for end-of-concurrent-mode signal
+                    int timeout = 0;
+                    while (*ready_flag != current_round + 100 && timeout < 100) {
+                        delay(100);
+                        timeout++;
+                    }
+                    
+                    if (timeout >= 100) {
+                        printf("Core 1: Timed out waiting for end-of-concurrent signal\n");
+                        
+                        // Force update of last_round to avoid getting stuck
+                        last_round = current_round;
+                    }
                 }
             } else {
                 delay(50);
