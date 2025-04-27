@@ -1,18 +1,11 @@
-// continuous_miss_dragon_test.c
-// Benchmark designed to maintain high cache miss rates throughout the test
+// fixed_dragon_test.c
+// Simplified benchmark that stays within memory bounds
 #include <stdio.h>
 #include <stdlib.h>
 
 // Simple delay function
 void delay(int cycles) {
     for (volatile int i = 0; i < cycles; i++);
-}
-
-// Function to generate a pseudo-random index
-// This ensures we don't fall into predictable access patterns
-int get_random_index(int seed, int range) {
-    // Simple linear congruential generator
-    return (seed * 1103515245 + 12345) % range;
 }
 
 int main(int argc, char** argv) {
@@ -22,20 +15,21 @@ int main(int argc, char** argv) {
     }
 
     int core_id = atoi(argv[1]);
+    
     // Shared memory region at virtual address 0x8000
+    // Use a smaller, safe size to avoid page faults
     volatile char* shmem_ptr = (volatile char*) (4096 * 8);
     
-    printf("Core %d: Starting Dragon protocol continuous miss test\n", core_id);
+    printf("Core %d: Starting Dragon protocol test\n", core_id);
     
-    // Define memory layout
-    // We'll use a large array to ensure we always exceed cache size
-    #define ARRAY_SIZE 4096  // Larger than cache capacity
-    #define SYNC_OFFSET 4100 // Beyond data array
+    // Define memory layout with conservative sizes
+    // Stay well within the 4KB page that's mapped
+    #define ARRAY_SIZE 1024  // 1KB array size, safely within 4KB page
     
-    volatile char* data_array = shmem_ptr;                          // 0x8000: data array
-    volatile int* ready_flag = (volatile int*)(shmem_ptr + SYNC_OFFSET);      // Ready flag
-    volatile int* ack_flag = (volatile int*)(shmem_ptr + SYNC_OFFSET + 4);    // Ack flag
-    volatile int* round_counter = (volatile int*)(shmem_ptr + SYNC_OFFSET + 8); // Round counter
+    volatile char* data_array = shmem_ptr;                    // 0x8000: data array
+    volatile int* ready_flag = (volatile int*)(shmem_ptr + ARRAY_SIZE);    // Ready flag
+    volatile int* ack_flag = (volatile int*)(shmem_ptr + ARRAY_SIZE + 4);  // Ack flag
+    volatile int* round_counter = (volatile int*)(shmem_ptr + ARRAY_SIZE + 8); // Round counter
     
     // Initialize shared memory if core 0
     if (core_id == 0) {
@@ -49,7 +43,7 @@ int main(int argc, char** argv) {
     }
     
     // Number of rounds to run
-    int rounds = 50;
+    int rounds = 20;
     
     if (core_id == 0) {
         printf("Core 0: Producer starting\n");
@@ -57,28 +51,21 @@ int main(int argc, char** argv) {
         for (int round = 1; round <= rounds; round++) {
             printf("Core 0: Starting round %d\n", round);
             
-            // Use large strides to guarantee cache misses
-            // Using prime number stride to avoid cache set pattern matching
-            int stride = 163; // Prime number stride
-            int seed = round * 37;
+            // Access the array with different patterns in each round
+            // This should force high cache miss rates
+            int step = (round % 5) + 1;  // Vary step size between rounds
             
-            // Write to memory locations with large strides
-            for (int i = 0; i < ARRAY_SIZE; i += stride) {
-                // Generate a pseudo-random index based on current position
-                int idx = get_random_index(seed + i, ARRAY_SIZE);
+            // Write to memory in a pattern designed to cause cache misses
+            for (int i = 0; i < ARRAY_SIZE; i += step) {
+                data_array[i] = (char)(round + i);
                 
-                // Update value
-                data_array[idx] = (char)(round + i);
-                
-                // Small delay between writes
-                delay(2);
-                
-                // Every few iterations, write to a previously accessed location
-                // to create coherence conflicts
-                if (i % 7 == 0 && i > 0) {
-                    int prev_idx = get_random_index(seed + i - stride, ARRAY_SIZE);
-                    data_array[prev_idx] = (char)(round + i + 1);
+                // Every few iterations, modify a previously accessed location
+                if (i > 0 && i % 16 == 0) {
+                    int prev = (i - step) % ARRAY_SIZE;
+                    data_array[prev] = (char)(round + prev + 1);
                 }
+                
+                delay(5);
             }
             
             // Signal data is ready
@@ -90,9 +77,9 @@ int main(int argc, char** argv) {
             while (*ack_flag != round) {
                 delay(50);
                 
-                // Continue writing to random locations while waiting
-                for (int j = 0; j < 20; j++) {
-                    int idx = get_random_index(seed + round + j * 123, ARRAY_SIZE);
+                // Continue writing to different locations while waiting
+                for (int j = 0; j < 10; j++) {
+                    int idx = (round * j + 7) % ARRAY_SIZE;
                     data_array[idx] = (char)(round + j + 50);
                 }
             }
@@ -116,27 +103,21 @@ int main(int argc, char** argv) {
             if (current_round > last_round) {
                 printf("Core 1: Processing data for round %d\n", current_round);
                 
-                // Use different access pattern than core 0 (different stride)
-                // to ensure we're not just benefiting from core 0's prefetching
-                int stride = 191; // Different prime number stride
-                int seed = current_round * 41;
+                // Use a different access pattern than core 0
+                int step = (current_round % 4) + 2;  // Different step size
                 int sum = 0;
                 
-                // Read and process data in a pattern designed to create misses
-                for (int i = 0; i < ARRAY_SIZE; i += stride) {
-                    // Generate a pseudo-random index
-                    int idx = get_random_index(seed + i, ARRAY_SIZE);
-                    
-                    // Read data
-                    sum += data_array[idx];
-                    delay(2);
+                // Read and process data with a different pattern
+                for (int i = 0; i < ARRAY_SIZE; i += step) {
+                    sum += data_array[i];
                     
                     // Every few iterations, modify a location
-                    if (i % 5 == 0) {
-                        // Choose a different location to modify
-                        int mod_idx = get_random_index(seed + i + 123, ARRAY_SIZE);
-                        data_array[mod_idx] = (char)(sum & 0xFF);
+                    if (i % 13 == 0) {
+                        int mod_idx = (i + 11) % ARRAY_SIZE;
+                        data_array[mod_idx] = (char)(current_round + mod_idx);
                     }
+                    
+                    delay(5);
                 }
                 
                 printf("Core 1: Data checksum for round %d: %d\n", current_round, sum);
@@ -152,17 +133,16 @@ int main(int argc, char** argv) {
                 while (*round_counter < current_round) {
                     delay(50);
                     
-                    // Continue accessing random locations while waiting
-                    for (int j = 0; j < 20; j++) {
-                        int idx = get_random_index(seed + j * 67, ARRAY_SIZE);
+                    // Access different memory locations while waiting
+                    for (int j = 0; j < 10; j++) {
+                        int idx = (current_round * j + 13) % ARRAY_SIZE;
                         data_array[idx] = (char)(data_array[idx] + 1);
                     }
                 }
             } else {
-                // No new data yet, access random memory locations to create traffic
-                int seed = last_round * 59;
-                for (int i = 0; i < 30; i++) {
-                    int idx = get_random_index(seed + i * 31, ARRAY_SIZE);
+                // No new data yet, modify memory at different locations
+                for (int i = 0; i < 5; i++) {
+                    int idx = (last_round * i + 23) % ARRAY_SIZE;
                     data_array[idx] = (char)(data_array[idx] + 1);
                 }
                 
