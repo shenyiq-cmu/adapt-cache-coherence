@@ -11,8 +11,8 @@ system.clk_domain.voltage_domain = VoltageDomain()
 system.mem_mode = 'timing'
 system.mem_ranges = [AddrRange('512MB')]
 
-# Number of CPU cores
-N = 2
+# Number of CPU cores - can be set to 4 or 8
+N = 6  # Change to 8 if needed
 
 # Create CPU cores
 system.cpu = [TimingSimpleCPU(cpu_id=i) for i in range(N)]
@@ -20,13 +20,13 @@ system.cpu = [TimingSimpleCPU(cpu_id=i) for i in range(N)]
 # Create the Dragon cache coherence components
 system.serializing_bus = SerializingBus()
 
-# Configure Dragon caches conservatively
+# Configure Dragon caches
 system.dragon_cache = [DragonCache(
     cache_id=i, 
     serializing_bus=system.serializing_bus, 
-    blockOffset=3,  # 8-byte blocks
+    blockOffset=4,  # 16-byte blocks
     setBit=2,       # 4 sets
-    cacheSizeBit=10 # 1KB cache (small enough to ensure we fit)
+    cacheSizeBit=12 # 4KB cache
 ) for i in range(N)]
 
 # Create the memory bus
@@ -65,15 +65,18 @@ for i in range(N):
 root = Root(full_system=False, system=system)
 m5.instantiate()
 
-# Map shared memory region - strictly 4KB only
+# Map shared memory region - exactly 4KB
 for i in range(N):
     processes[i].map(4096*8, 4096*8, 4096, cacheable=True)
 
+# Reset stats before simulation
+m5.stats.reset()
 
-print("Beginning simulation of Dragon protocol fixed matrix benchmark!")
+print(f"Beginning simulation of Dragon protocol with {N} cores!")
 
-# Run simulation with a reasonable time limit (3 seconds at 1GHz)
-tick_limit = 3000000000
+# Run simulation with a reasonable time limit
+#tick_limit = 5000000000  # 5 billion ticks
 exit_event = m5.simulate()
 
 print(f"Exiting @ tick {m5.curTick()} because {exit_event.getCause()}")
+
