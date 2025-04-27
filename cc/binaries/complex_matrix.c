@@ -78,6 +78,8 @@
          // Print input matrices
          printf("Core 0: Matrix A initialized\n");
          printf("Core 0: Matrix B initialized\n");
+     } else{
+        delay(5000); // wait for init
      }
      
      // Make sure both cores are ready before starting
