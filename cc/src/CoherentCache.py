@@ -60,3 +60,14 @@ class HybridCache(CoherentCacheBase):
     setBit = Param.Int(4, 'number of bits for cache set')
     cacheSizeBit = Param.Int(15, 'number of bits for cache size')
     invalidThreshold = Param.Int(5, 'initial value of invalid threshold')
+
+class AdaptCache(CoherentCacheBase):
+    type = 'AdaptCache'
+    cxx_header = 'src_740/adapt_cache.hh'
+    cxx_class = 'gem5::AdaptCache'
+
+    blockOffset = Param.Int(5, 'number of bits for blockOffset')
+    setBit = Param.Int(4, 'number of bits for cache set')
+    cacheSizeBit = Param.Int(15, 'number of bits for cache size')
+    invalidThreshold = Param.Int(0, 'initial value of invalid threshold')
+    invalidationRatio = Param.Int(5, '(Ci + Cr)/Cu')
