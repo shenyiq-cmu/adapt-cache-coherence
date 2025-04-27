@@ -10,7 +10,7 @@
  
  // Define matrix dimensions
  #define SIZE 16          // Matrix size (SIZE x SIZE)
- #define BLOCK_SIZE 4     // Block size for tiled operations
+ #define BLOCK_SIZE 2     // Block size for tiled operations
  
  // Structure to hold a matrix in shared memory
  typedef struct {
