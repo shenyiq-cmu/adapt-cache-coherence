@@ -17,7 +17,7 @@ system.cpu = [TimingSimpleCPU(cpu_id=i) for i in range(N)]
 
 # Create the Dragon cache coherence components
 system.serializing_bus = SerializingBus()
-system.dragon_cache = [DragonCache(
+system.dragon_cache = [mesi(
     cache_id=i, 
     serializing_bus=system.serializing_bus, 
     blockOffset=6,  # 64-byte blocks (2^6)
