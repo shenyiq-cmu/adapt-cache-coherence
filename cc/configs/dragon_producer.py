@@ -2,6 +2,7 @@ import m5
 from m5.objects import *
 import sys
 
+# Create system
 system = System()
 system.clk_domain = SrcClockDomain()
 system.clk_domain.clock = '1GHz'
@@ -13,16 +14,23 @@ system.mem_ranges = [AddrRange('512MB')]
 # Number of CPU cores
 N = 2
 
+# Create CPU cores
 system.cpu = [TimingSimpleCPU(cpu_id=i) for i in range(N)]
 
 # Create the Dragon cache coherence components
 system.serializing_bus = SerializingBus()
+
+# Configure Dragon caches with extremely poor parameters to maximize misses:
+# - Tiny cache size (1KB)
+# - Very few sets (2)
+# - Tiny blocks (8 bytes)
+# This ensures we get continuous cache misses throughout the test
 system.dragon_cache = [DragonCache(
     cache_id=i, 
     serializing_bus=system.serializing_bus, 
-    blockOffset=6,  # 64-byte blocks (2^6)
-    setBit=4,       # 16 sets (2^4)
-    cacheSizeBit=13 # 8KB cache (2^13)
+    blockOffset=3,  # 8-byte blocks (tiny blocks generate more misses)
+    setBit=3,       # 2 sets (almost guaranteed conflicts)
+    cacheSizeBit=12 # 1KB cache (extremely small)
 ) for i in range(N)]
 
 # Create the memory bus
@@ -61,20 +69,17 @@ for i in range(N):
 root = Root(full_system=False, system=system)
 m5.instantiate()
 
-# Map virtual address 0x8000 to physical address 0x8000 as shared memory
-# This ensures both cores access the same physical memory for communication
+# Map shared memory region (we need more memory for the continuous miss test)
+# Map 8KB of shared memory instead of just 4KB
 for i in range(N):
-    processes[i].map(4096*8, 4096*8, 4096, cacheable=True)
+    processes[i].map(4096*8, 4096*8, 8192, cacheable=True)
 
-# Enable stats collection
+# Reset stats before simulation
 m5.stats.reset()
 
-print("Beginning simulation of Dragon cache coherence protocol!")
+print("Beginning simulation of Dragon protocol continuous miss benchmark!")
+
+# Run simulation without limits
 exit_event = m5.simulate()
 
-# Print results
 print(f"Exiting @ tick {m5.curTick()} because {exit_event.getCause()}")
-
-# Print bus statistics
-print(f"Bus Transactions: {system.serializing_bus.stats.transCount}")
-

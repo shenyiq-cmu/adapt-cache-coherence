@@ -2,6 +2,7 @@ import m5
 from m5.objects import *
 import sys
 
+# Create system
 system = System()
 system.clk_domain = SrcClockDomain()
 system.clk_domain.clock = '1GHz'
@@ -13,16 +14,22 @@ system.mem_ranges = [AddrRange('512MB')]
 # Number of CPU cores
 N = 2
 
+# Create CPU cores
 system.cpu = [TimingSimpleCPU(cpu_id=i) for i in range(N)]
 
 # Create the Dragon cache coherence components
 system.serializing_bus = SerializingBus()
+
+# Configure Dragon caches with parameters optimized for matrix operations:
+# - Moderately sized caches
+# - Block size aligned with matrix access patterns
+# - Number of sets to balance capacity and associativity
 system.dragon_cache = [MesiCache(
     cache_id=i, 
     serializing_bus=system.serializing_bus, 
-    blockOffset=6,  # 64-byte blocks (2^6)
-    setBit=4,       # 16 sets (2^4)
-    cacheSizeBit=13 # 8KB cache (2^13)
+    blockOffset=5,  # 32-byte blocks (good for 4x4 int blocks)
+    setBit=3,       # 8 sets
+    cacheSizeBit=13 # 8KB cache
 ) for i in range(N)]
 
 # Create the memory bus
@@ -61,20 +68,16 @@ for i in range(N):
 root = Root(full_system=False, system=system)
 m5.instantiate()
 
-# Map virtual address 0x8000 to physical address 0x8000 as shared memory
-# This ensures both cores access the same physical memory for communication
+# Map shared memory region - need more space for matrices (16KB)
 for i in range(N):
-    processes[i].map(4096*8, 4096*8, 4096, cacheable=True)
+    processes[i].map(4096*8, 4096*8, 16*1024, cacheable=True)
 
-# Enable stats collection
+# Reset stats before simulation
 m5.stats.reset()
 
-print("Beginning simulation of Dragon cache coherence protocol!")
+print("Beginning simulation of Dragon protocol matrix benchmark!")
+
+# Run simulation without limits
 exit_event = m5.simulate()
 
-# Print results
 print(f"Exiting @ tick {m5.curTick()} because {exit_event.getCause()}")
-
-# Print bus statistics
-print(f"Bus Transactions: {system.serializing_bus.stats.transCount}")
-
