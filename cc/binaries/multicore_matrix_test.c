@@ -1,6 +1,5 @@
-// dragon_fixed_multicore_test.c
-// Memory-efficient matrix operations benchmark for Dragon cache coherence protocol
-// Supports 4/8 cores with deadlock prevention
+// dragon_improved_multicore_test.c
+// Improved multi-core test for Dragon protocol with safe synchronization
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -9,40 +8,18 @@ void delay(int cycles) {
     for (volatile int i = 0; i < cycles; i++);
 }
 
-// Define matrix dimensions - keep small to fit in 4KB
-#define SIZE 6           // 6x6 matrices
-#define MAX_CORES 8      // Maximum number of cores supported
+// Define maximum number of cores and array size
+#define MAX_CORES 8
+#define ARRAY_SIZE 32
 
-// Structure for control variables - keep separate from matrices
-typedef struct {
-    volatile int phase;                  // Current operation phase
-    volatile int sync_flags[MAX_CORES];  // Sync flags for each core
-    volatile int num_cores;              // Number of cores in use
-    volatile int checksum;               // For sharing checksum results
-} Control;
-
-// Function to initialize a matrix
-void matrix_init(volatile int data[SIZE][SIZE], int pattern) {
-    for (int i = 0; i < SIZE; i++) {
-        for (int j = 0; j < SIZE; j++) {
-            switch (pattern) {
-                case 1:  data[i][j] = i + j; break;         // Pattern 1: i+j
-                case 2:  data[i][j] = (i * j) % 10; break;  // Pattern 2: i*j mod 10
-                default: data[i][j] = 0; break;             // Default: all zeros
-            }
-        }
+// Safe synchronization function
+int wait_for_value(volatile int *addr, int expected_value, int timeout_loops) {
+    int timeout = 0;
+    while (*addr != expected_value && timeout < timeout_loops) {
+        delay(100);
+        timeout++;
     }
-}
-
-// Function to compute matrix checksum
-int matrix_checksum(volatile int data[SIZE][SIZE]) {
-    int sum = 0;
-    for (int i = 0; i < SIZE; i++) {
-        for (int j = 0; j < SIZE; j++) {
-            sum += data[i][j];
-        }
-    }
-    return sum;
+    return (timeout < timeout_loops); // Return 1 if succeeded, 0 if timed out
 }
 
 int main(int argc, char** argv) {
@@ -56,277 +33,230 @@ int main(int argc, char** argv) {
     // Shared memory region at virtual address 0x8000
     volatile void* shmem_ptr = (volatile void*) (4096 * 8);
     
-    printf("Core %d: Starting Dragon fixed multicore test\n", core_id);
+    printf("Core %d: Starting improved multi-core test\n", core_id);
     
-    // Memory layout - control variables first, then matrices
-    volatile Control* control = (volatile Control*) shmem_ptr;
+    // Memory layout - compact and simple
+    volatile int* data = (volatile int*) shmem_ptr;                // Data array [0-31]
+    volatile int* num_cores = (volatile int*) (data + ARRAY_SIZE); // Number of cores [32]
+    volatile int* phase = (volatile int*) (num_cores + 1);         // Current phase [33]
+    volatile int* ready = (volatile int*) (phase + 1);             // Ready flags [34-41]
+    volatile int* done = (volatile int*) (ready + MAX_CORES);      // Done flags [42-49]
     
-    // Place matrices after control structure
-    volatile int (*A)[SIZE] = (volatile int (*)[SIZE])((char*)control + sizeof(Control));
-    volatile int (*B)[SIZE] = (volatile int (*)[SIZE])((char*)A + sizeof(int[SIZE][SIZE]));
-    
-    // Check memory bounds
-    volatile char* end_ptr = (volatile char*)B + sizeof(int[SIZE][SIZE]);
-    
-    // Core 0 initializes everything
     if (core_id == 0) {
-        printf("Core 0: Initializing matrices and control variables\n");
+        printf("Core 0: Initializing shared memory\n");
         
-        // Check memory bounds
-        printf("Core 0: Control at %p, A at %p, B at %p, End at %p\n", 
-               control, A, B, end_ptr);
-        
-        if (end_ptr > (char*)shmem_ptr + 4096) {
-            printf("ERROR: Memory layout exceeds 4KB shared memory limit!\n");
-            // Initialize just enough to let other cores know
-            control->phase = -1;
-            return 1;
+        // Clear data array
+        for (int i = 0; i < ARRAY_SIZE; i++) {
+            data[i] = 0;
         }
         
-        // Configure number of cores (4 or 8)
-        control->num_cores = 4;  // Change to 8 for 8-core test
+        // Set test parameters
+        *num_cores = 4;  // Change to 8 for 8-core test
+        *phase = 0;      // Starting phase
         
-        // Initialize control variables
-        control->phase = 0;
-        control->checksum = 0;
-        
-        // Important: initialize all sync flags
+        // Clear all flags
         for (int i = 0; i < MAX_CORES; i++) {
-            control->sync_flags[i] = 0;
+            ready[i] = 0;
+            done[i] = 0;
         }
         
-        // Initialize matrices
-        matrix_init(A, 1);  // Initialize A with pattern 1
-        matrix_init(B, 0);  // Initialize B with zeros
-        
-        // Memory barrier to ensure all writes are visible
-        __sync_synchronize();
-        
-        printf("Core 0: Matrices initialized\n");
+        printf("Core 0: Initialization complete\n");
     }
     
-    // Wait a bit to ensure initialization is complete
-    delay(5000);
+    // Wait a moment for initialization
+    delay(10000);
     
-    // Check if this core should participate
-    if (core_id >= control->num_cores) {
-        printf("Core %d: Not needed for this test (using %d cores)\n", 
-               core_id, control->num_cores);
+    // Check if we should participate
+    if (core_id >= *num_cores) {
+        printf("Core %d: Not needed for this test\n", core_id);
         return 0;
     }
     
-    // Check for initialization error
-    if (control->phase == -1) {
-        printf("Core %d: Detected memory overflow error, exiting\n", core_id);
-        return 1;
-    }
+    // Signal that this core is ready
+    printf("Core %d: Signaling ready\n", core_id);
+    ready[core_id] = 1;
     
-    // First synchronization: all cores signal they're ready
-    printf("Core %d: Setting initial sync flag\n", core_id);
-    control->sync_flags[core_id] = 1;
-    
-    // Wait for all cores to be ready
-    int timeout = 0;
-    int all_ready = 0;
-    
-    while (!all_ready && timeout < 100) {
-        all_ready = 1;
-        
-        for (int i = 0; i < control->num_cores; i++) {
-            if (control->sync_flags[i] != 1) {
-                all_ready = 0;
-                break;
-            }
-        }
-        
-        if (!all_ready) {
-            delay(1000);
-            timeout++;
-        }
-    }
-    
-    if (timeout >= 100) {
-        printf("Core %d: Timeout waiting for all cores to initialize, continuing anyway\n", core_id);
-    }
-    
-    printf("Core %d: Starting matrix operations\n", core_id);
-    
-    // Calculate work division
-    int rows_per_core = SIZE / control->num_cores;
-    int start_row = core_id * rows_per_core;
-    int end_row = (core_id == control->num_cores - 1) ? SIZE : start_row + rows_per_core;
-    
-    // Reset sync flags for next phase (only core 0 does this)
+    // Core 0 waits for all cores and starts the test
     if (core_id == 0) {
-        // Signal start of phase 1 AFTER resetting flags
-        for (int i = 0; i < control->num_cores; i++) {
-            control->sync_flags[i] = 0;
-        }
-        
-        // Memory barrier
-        __sync_synchronize();
-        
-        // Now set the phase to signal other cores
-        control->phase = 1;
-    }
-    
-    // Wait for phase 1 signal
-    timeout = 0;
-    while (control->phase != 1 && timeout < 100) {
-        delay(1000);
-        timeout++;
-    }
-    
-    if (timeout >= 100) {
-        printf("Core %d: Timeout waiting for phase 1 signal\n", core_id);
-    }
-    
-    // Phase 1: Matrix multiplication
-    printf("Core %d: Starting matrix multiplication (rows %d to %d)\n", 
-           core_id, start_row, end_row-1);
-    
-    // Process assigned rows
-    for (int i = start_row; i < end_row; i++) {
-        for (int j = 0; j < SIZE; j++) {
-            int sum = 0;
-            for (int k = 0; k < SIZE; k++) {
-                sum += A[i][k] * A[k][j];  // Use A as both input matrices
+        // Wait for all cores to be ready
+        for (int i = 1; i < *num_cores; i++) {
+            int success = wait_for_value(&ready[i], 1, 100);
+            if (!success) {
+                printf("Core 0: Timeout waiting for core %d to be ready\n", i);
+                // Continue anyway, core might catch up
             }
-            B[i][j] = sum;  // Store result in B
-            delay(1);
         }
+        
+        printf("Core 0: All cores ready, starting phase 1\n");
+        *phase = 1;
+    } else {
+        // Wait for all cores to be ready and phase 1 to start
+        int success = wait_for_value(phase, 1, 100);
+        if (!success) {
+            printf("Core %d: Timeout waiting for phase 1 to start\n", core_id);
+            return 1;
+        }
+    }
+    
+    // ---------------------- PHASE 1: WRITE OWN DATA ----------------------
+    printf("Core %d: Starting phase 1 - writing own data\n", core_id);
+    
+    // Calculate my section of the array
+    int items_per_core = ARRAY_SIZE / *num_cores;
+    int start_idx = core_id * items_per_core;
+    int end_idx = (core_id == *num_cores-1) ? ARRAY_SIZE : start_idx + items_per_core;
+    
+    // Write to my section
+    for (int i = start_idx; i < end_idx; i++) {
+        data[i] = 100 * (core_id + 1) + (i - start_idx);
+        // Small delay to create some interleaving
+        if (i % 2 == 0) delay(20);
     }
     
     // Signal completion of phase 1
-    printf("Core %d: Matrix multiplication complete\n", core_id);
-    control->sync_flags[core_id] = 1;
+    printf("Core %d: Completed phase 1\n", core_id);
+    done[core_id] = 1;
     
-    // Core 0 calculates checksum and coordinates phase 2
+    // Core 0 coordinates transition to phase 2
     if (core_id == 0) {
-        // Wait for all cores to complete matrix multiplication
-        timeout = 0;
-        all_ready = 0;
-        
-        while (!all_ready && timeout < 100) {
-            all_ready = 1;
-            
-            for (int i = 0; i < control->num_cores; i++) {
-                if (control->sync_flags[i] != 1) {
-                    all_ready = 0;
-                    break;
-                }
-            }
-            
-            if (!all_ready) {
-                delay(1000);
-                timeout++;
+        // Wait for all cores to complete phase 1
+        for (int i = 1; i < *num_cores; i++) {
+            int success = wait_for_value(&done[i], 1, 100);
+            if (!success) {
+                printf("Core 0: Timeout waiting for core %d to complete phase 1\n", i);
+                // Continue anyway
             }
         }
         
-        if (timeout >= 100) {
-            printf("Core 0: Timeout waiting for multiplication completion\n");
+        // Reset done flags
+        for (int i = 0; i < *num_cores; i++) {
+            done[i] = 0;
         }
-        
-        // Calculate and store checksum
-        control->checksum = matrix_checksum(B);
-        printf("Core 0: Matrix B checksum after multiplication: %d\n", control->checksum);
-        
-        // Reset sync flags for next phase
-        for (int i = 0; i < control->num_cores; i++) {
-            control->sync_flags[i] = 0;
-        }
-        
-        // Memory barrier
-        __sync_synchronize();
         
         // Signal start of phase 2
-        control->phase = 2;
-    }
-    
-    // All cores wait for phase 2 signal
-    timeout = 0;
-    while (control->phase != 2 && timeout < 100) {
-        delay(1000);
-        timeout++;
-    }
-    
-    if (timeout >= 100) {
-        printf("Core %d: Timeout waiting for phase 2 signal\n", core_id);
-    }
-    
-    // Phase 2: Matrix transposition by columns
-    // Calculate column division
-    int cols_per_core = SIZE / control->num_cores;
-    int start_col = core_id * cols_per_core;
-    int end_col = (core_id == control->num_cores - 1) ? SIZE : start_col + cols_per_core;
-    
-    printf("Core %d: Starting matrix transposition (columns %d to %d)\n", 
-           core_id, start_col, end_col-1);
-    
-    // Process assigned columns
-    for (int j = start_col; j < end_col; j++) {
-        for (int i = 0; i < SIZE; i++) {
-            // Only swap if i != j to avoid conflicts
-            if (i != j) {
-                int temp = B[i][j];
-                B[i][j] = B[j][i];
-                B[j][i] = temp;
-            }
-            delay(1);
+        printf("Core 0: All cores completed phase 1, starting phase 2\n");
+        __sync_synchronize(); // Memory barrier
+        *phase = 2;
+    } else {
+        // Wait for phase 2 to start
+        int success = wait_for_value(phase, 2, 100);
+        if (!success) {
+            printf("Core %d: Timeout waiting for phase 2 to start\n", core_id);
+            return 1;
         }
     }
     
-    // Signal completion of phase 2
-    printf("Core %d: Matrix transposition complete\n", core_id);
-    control->sync_flags[core_id] = 2;
+    // ---------------------- PHASE 2: READ ALL DATA ----------------------
+    printf("Core %d: Starting phase 2 - reading all data\n", core_id);
     
-    // Core 0 calculates checksum and signals completion
+    // Read all sections to generate coherence traffic
+    int checksum = 0;
+    for (int i = 0; i < ARRAY_SIZE; i++) {
+        // Read the value
+        int val = data[i];
+        checksum += val;
+        
+        // Print some values to verify
+        if (i % items_per_core == 0) {
+            printf("Core %d: Read data[%d] = %d\n", core_id, i, val);
+        }
+        
+        // Small delay to create some interleaving
+        if (i % 3 == 0) delay(15);
+    }
+    
+    printf("Core %d: Completed phase 2, checksum = %d\n", core_id, checksum);
+    done[core_id] = 2;
+    
+    // Core 0 coordinates transition to phase 3
     if (core_id == 0) {
-        // Wait for all cores to complete transposition
-        timeout = 0;
-        all_ready = 0;
-        
-        while (!all_ready && timeout < 100) {
-            all_ready = 1;
-            
-            for (int i = 0; i < control->num_cores; i++) {
-                if (control->sync_flags[i] != 2) {
-                    all_ready = 0;
-                    break;
-                }
-            }
-            
-            if (!all_ready) {
-                delay(1000);
-                timeout++;
+        // Wait for all cores to complete phase 2
+        for (int i = 1; i < *num_cores; i++) {
+            int success = wait_for_value(&done[i], 2, 100);
+            if (!success) {
+                printf("Core 0: Timeout waiting for core %d to complete phase 2\n", i);
+                // Continue anyway
             }
         }
         
-        if (timeout >= 100) {
-            printf("Core 0: Timeout waiting for transposition completion\n");
+        // Reset done flags
+        for (int i = 0; i < *num_cores; i++) {
+            done[i] = 0;
         }
         
-        // Calculate and store final checksum
-        control->checksum = matrix_checksum(B);
-        printf("Core 0: Matrix B final checksum: %d\n", control->checksum);
-        printf("Core 0: All matrix operations complete\n");
+        // Signal start of phase 3
+        printf("Core 0: All cores completed phase 2, starting phase 3\n");
+        __sync_synchronize(); // Memory barrier
+        *phase = 3;
+    } else {
+        // Wait for phase 3 to start
+        int success = wait_for_value(phase, 3, 100);
+        if (!success) {
+            printf("Core %d: Timeout waiting for phase 3 to start\n", core_id);
+            return 1;
+        }
+    }
+    
+    // ---------------------- PHASE 3: MODIFY OTHERS' DATA ----------------------
+    printf("Core %d: Starting phase 3 - modifying other cores' data\n", core_id);
+    
+    // Determine which section to modify (the next core's section)
+    int target_core = (core_id + 1) % *num_cores;
+    int target_start = target_core * items_per_core;
+    int target_end = (target_core == *num_cores-1) ? ARRAY_SIZE : target_start + items_per_core;
+    
+    printf("Core %d: Modifying core %d's section (indices %d-%d)\n", 
+           core_id, target_core, target_start, target_end-1);
+    
+    // Modify the target section
+    for (int i = target_start; i < target_end; i++) {
+        // Read current value
+        int current = data[i];
+        
+        // Modify it
+        data[i] = current + 1000;
+        
+        // Print some values to verify
+        if (i == target_start || i == target_end-1) {
+            printf("Core %d: Modified data[%d] from %d to %d\n", 
+                   core_id, i, current, data[i]);
+        }
+        
+        // Small delay to create some interleaving
+        if (i % 2 == 1) delay(25);
+    }
+    
+    printf("Core %d: Completed phase 3\n", core_id);
+    done[core_id] = 3;
+    
+    // Final synchronization
+    if (core_id == 0) {
+        // Wait for all cores to complete phase 3
+        for (int i = 1; i < *num_cores; i++) {
+            int success = wait_for_value(&done[i], 3, 100);
+            if (!success) {
+                printf("Core 0: Timeout waiting for core %d to complete phase 3\n", i);
+                // Continue anyway
+            }
+        }
         
         // Signal completion
-        control->phase = 3;
-    }
-    
-    // All cores wait for completion signal
-    timeout = 0;
-    while (control->phase != 3 && timeout < 100) {
-        delay(1000);
-        timeout++;
-    }
-    
-    if (timeout >= 100) {
-        printf("Core %d: Timeout waiting for completion signal\n", core_id);
+        printf("Core 0: All cores completed phase 3, test complete\n");
+        *phase = 4;
     } else {
-        printf("Core %d: All matrix operations completed successfully\n", core_id);
+        // Wait for test completion
+        int success = wait_for_value(phase, 4, 100);
+        if (!success) {
+            printf("Core %d: Timeout waiting for test completion\n", core_id);
+        }
     }
     
+    // One final read to verify results
+    checksum = 0;
+    for (int i = 0; i < ARRAY_SIZE; i++) {
+        checksum += data[i];
+    }
+    
+    printf("Core %d: Final checksum = %d, test completed\n", core_id, checksum);
     return 0;
 }
