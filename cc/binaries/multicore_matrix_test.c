@@ -1,6 +1,6 @@
-// dragon_multicore_matrix_test.c
-// Matrix operations benchmark for Dragon cache coherence protocol
-// Extended to support 4 or 8 cores
+// dragon_fixed_multicore_test.c
+// Memory-efficient matrix operations benchmark for Dragon cache coherence protocol
+// Supports 4/8 cores with deadlock prevention
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -9,29 +9,41 @@ void delay(int cycles) {
     for (volatile int i = 0; i < cycles; i++);
 }
 
-// Define matrix dimensions
-#define SIZE 16          // Matrix size (SIZE x SIZE)
-#define BLOCK_SIZE 2     // Block size for tiled operations
+// Define matrix dimensions - keep small to fit in 4KB
+#define SIZE 6           // 6x6 matrices
 #define MAX_CORES 8      // Maximum number of cores supported
 
-// Structure to hold a matrix in shared memory
+// Structure for control variables - keep separate from matrices
 typedef struct {
-    int data[SIZE][SIZE];
-} Matrix;
-
-// Small structure for control variables to ensure they're at the start of shared memory
-typedef struct {
-    int phase;                    // Current operation phase
-    int sync_flags[MAX_CORES];    // Synchronization flags for each core
-    int num_cores;                // Total number of cores in use
+    volatile int phase;                  // Current operation phase
+    volatile int sync_flags[MAX_CORES];  // Sync flags for each core
+    volatile int num_cores;              // Number of cores in use
+    volatile int checksum;               // For sharing checksum results
 } Control;
 
-// Function prototypes
-void matrix_multiply_blocked(Matrix* A, Matrix* B, Matrix* C, int start_row, int end_row);
-void matrix_transpose(Matrix* A, Matrix* B, int start_row, int end_row);
-void matrix_add(Matrix* A, Matrix* B, Matrix* C, int start_col, int end_col);
-void matrix_init(Matrix* M, int pattern);
-int matrix_checksum(Matrix* M);
+// Function to initialize a matrix
+void matrix_init(volatile int data[SIZE][SIZE], int pattern) {
+    for (int i = 0; i < SIZE; i++) {
+        for (int j = 0; j < SIZE; j++) {
+            switch (pattern) {
+                case 1:  data[i][j] = i + j; break;         // Pattern 1: i+j
+                case 2:  data[i][j] = (i * j) % 10; break;  // Pattern 2: i*j mod 10
+                default: data[i][j] = 0; break;             // Default: all zeros
+            }
+        }
+    }
+}
+
+// Function to compute matrix checksum
+int matrix_checksum(volatile int data[SIZE][SIZE]) {
+    int sum = 0;
+    for (int i = 0; i < SIZE; i++) {
+        for (int j = 0; j < SIZE; j++) {
+            sum += data[i][j];
+        }
+    }
+    return sum;
+}
 
 int main(int argc, char** argv) {
     if (argc < 2) {
@@ -44,284 +56,277 @@ int main(int argc, char** argv) {
     // Shared memory region at virtual address 0x8000
     volatile void* shmem_ptr = (volatile void*) (4096 * 8);
     
-    printf("Core %d: Starting Dragon multicore matrix test\n", core_id);
+    printf("Core %d: Starting Dragon fixed multicore test\n", core_id);
     
-    // Memory layout - control structure first to ensure it's at beginning of shared memory
+    // Memory layout - control variables first, then matrices
     volatile Control* control = (volatile Control*) shmem_ptr;
     
-    // Matrices - place after control structure
-    volatile Matrix* A = (volatile Matrix*) (control + 1);    // Input matrix A
-    volatile Matrix* B = (volatile Matrix*) (A + 1);          // Input matrix B
-    volatile Matrix* C = (volatile Matrix*) (B + 1);          // Result matrix C
+    // Place matrices after control structure
+    volatile int (*A)[SIZE] = (volatile int (*)[SIZE])((char*)control + sizeof(Control));
+    volatile int (*B)[SIZE] = (volatile int (*)[SIZE])((char*)A + sizeof(int[SIZE][SIZE]));
     
-    // Check memory bounds (only need to use 3 matrices to stay within 4KB)
-    // Each 16x16 matrix is ~1KB, so 3 matrices plus control is around 3.1KB
-    volatile char* end_ptr = (volatile char*)C + sizeof(Matrix);
-    if (end_ptr > (char*)shmem_ptr + 4096) {
-        printf("ERROR: Memory layout exceeds 4KB shared memory limit!\n");
-        return 1;
-    }
+    // Check memory bounds
+    volatile char* end_ptr = (volatile char*)B + sizeof(int[SIZE][SIZE]);
     
     // Core 0 initializes everything
     if (core_id == 0) {
         printf("Core 0: Initializing matrices and control variables\n");
         
-        // If using 4 cores, set num_cores to 4; if using 8 cores, set to 8
+        // Check memory bounds
+        printf("Core 0: Control at %p, A at %p, B at %p, End at %p\n", 
+               control, A, B, end_ptr);
+        
+        if (end_ptr > (char*)shmem_ptr + 4096) {
+            printf("ERROR: Memory layout exceeds 4KB shared memory limit!\n");
+            // Initialize just enough to let other cores know
+            control->phase = -1;
+            return 1;
+        }
+        
+        // Configure number of cores (4 or 8)
         control->num_cores = 4;  // Change to 8 for 8-core test
         
         // Initialize control variables
         control->phase = 0;
-        for (int i = 0; i < control->num_cores; i++) {
+        control->checksum = 0;
+        
+        // Important: initialize all sync flags
+        for (int i = 0; i < MAX_CORES; i++) {
             control->sync_flags[i] = 0;
         }
         
-        // Initialize matrices with different patterns
-        matrix_init((Matrix*)A, 1);  // Initialize with pattern 1 (i+j)
-        matrix_init((Matrix*)B, 2);  // Initialize with pattern 2 (i*j)
+        // Initialize matrices
+        matrix_init(A, 1);  // Initialize A with pattern 1
+        matrix_init(B, 0);  // Initialize B with zeros
         
-        // Clear result matrix
-        for (int i = 0; i < SIZE; i++) {
-            for (int j = 0; j < SIZE; j++) {
-                C->data[i][j] = 0;
-            }
-        }
+        // Memory barrier to ensure all writes are visible
+        __sync_synchronize();
         
-        printf("Core 0: Initialization complete, num_cores = %d\n", control->num_cores);
-    } else {
-        // Other cores wait for initialization
-        delay(5000); // Wait for initialization
+        printf("Core 0: Matrices initialized\n");
     }
+    
+    // Wait a bit to ensure initialization is complete
+    delay(5000);
     
     // Check if this core should participate
     if (core_id >= control->num_cores) {
-        printf("Core %d: Not participating in this test (num_cores = %d)\n", 
-              core_id, control->num_cores);
+        printf("Core %d: Not needed for this test (using %d cores)\n", 
+               core_id, control->num_cores);
         return 0;
     }
     
-    // All participating cores synchronize before starting
+    // Check for initialization error
+    if (control->phase == -1) {
+        printf("Core %d: Detected memory overflow error, exiting\n", core_id);
+        return 1;
+    }
+    
+    // First synchronization: all cores signal they're ready
+    printf("Core %d: Setting initial sync flag\n", core_id);
     control->sync_flags[core_id] = 1;
-    printf("Core %d: Set sync flag, waiting for others\n", core_id);
     
     // Wait for all cores to be ready
+    int timeout = 0;
     int all_ready = 0;
-    while (!all_ready) {
+    
+    while (!all_ready && timeout < 100) {
         all_ready = 1;
+        
         for (int i = 0; i < control->num_cores; i++) {
             if (control->sync_flags[i] != 1) {
                 all_ready = 0;
                 break;
             }
         }
-        if (!all_ready) delay(100);
-    }
-    
-    printf("Core %d: All cores ready, starting matrix operations\n", core_id);
-    
-    // Phase 1: Matrix multiplication C = A * B
-    // Divide work among all cores based on rows
-    if (core_id == 0) {
-        // Core 0 signals start of phase 1
-        control->phase = 1;
         
-        // Reset sync flags
-        for (int i = 0; i < control->num_cores; i++) {
-            control->sync_flags[i] = 0;
+        if (!all_ready) {
+            delay(1000);
+            timeout++;
         }
     }
     
-    // Wait for phase 1 signal
-    while (control->phase != 1) delay(100);
+    if (timeout >= 100) {
+        printf("Core %d: Timeout waiting for all cores to initialize, continuing anyway\n", core_id);
+    }
     
-    // Calculate this core's portion of the work for multiplication
+    printf("Core %d: Starting matrix operations\n", core_id);
+    
+    // Calculate work division
     int rows_per_core = SIZE / control->num_cores;
     int start_row = core_id * rows_per_core;
     int end_row = (core_id == control->num_cores - 1) ? SIZE : start_row + rows_per_core;
     
-    printf("Core %d: Starting matrix multiplication (rows %d to %d)\n", 
-          core_id, start_row, end_row-1);
-    
-    // Perform matrix multiplication for assigned rows
-    matrix_multiply_blocked((Matrix*)A, (Matrix*)B, (Matrix*)C, start_row, end_row);
-    
-    // Signal completion
-    control->sync_flags[core_id] = 1;
-    printf("Core %d: Matrix multiplication complete\n", core_id);
-    
-    // Wait for all cores to complete multiplication
-    all_ready = 0;
-    while (!all_ready) {
-        all_ready = 1;
+    // Reset sync flags for next phase (only core 0 does this)
+    if (core_id == 0) {
+        // Signal start of phase 1 AFTER resetting flags
         for (int i = 0; i < control->num_cores; i++) {
-            if (control->sync_flags[i] != 1) {
-                all_ready = 0;
-                break;
+            control->sync_flags[i] = 0;
+        }
+        
+        // Memory barrier
+        __sync_synchronize();
+        
+        // Now set the phase to signal other cores
+        control->phase = 1;
+    }
+    
+    // Wait for phase 1 signal
+    timeout = 0;
+    while (control->phase != 1 && timeout < 100) {
+        delay(1000);
+        timeout++;
+    }
+    
+    if (timeout >= 100) {
+        printf("Core %d: Timeout waiting for phase 1 signal\n", core_id);
+    }
+    
+    // Phase 1: Matrix multiplication
+    printf("Core %d: Starting matrix multiplication (rows %d to %d)\n", 
+           core_id, start_row, end_row-1);
+    
+    // Process assigned rows
+    for (int i = start_row; i < end_row; i++) {
+        for (int j = 0; j < SIZE; j++) {
+            int sum = 0;
+            for (int k = 0; k < SIZE; k++) {
+                sum += A[i][k] * A[k][j];  // Use A as both input matrices
+            }
+            B[i][j] = sum;  // Store result in B
+            delay(1);
+        }
+    }
+    
+    // Signal completion of phase 1
+    printf("Core %d: Matrix multiplication complete\n", core_id);
+    control->sync_flags[core_id] = 1;
+    
+    // Core 0 calculates checksum and coordinates phase 2
+    if (core_id == 0) {
+        // Wait for all cores to complete matrix multiplication
+        timeout = 0;
+        all_ready = 0;
+        
+        while (!all_ready && timeout < 100) {
+            all_ready = 1;
+            
+            for (int i = 0; i < control->num_cores; i++) {
+                if (control->sync_flags[i] != 1) {
+                    all_ready = 0;
+                    break;
+                }
+            }
+            
+            if (!all_ready) {
+                delay(1000);
+                timeout++;
             }
         }
-        if (!all_ready) delay(100);
-    }
-    
-    // Only core 0 calculates checksum
-    if (core_id == 0) {
-        printf("Core 0: Matrix C checksum: %d\n", matrix_checksum((Matrix*)C));
-    }
-    
-    // Phase 2: Matrix transpose B = C^T
-    // Divide work among cores based on rows
-    if (core_id == 0) {
+        
+        if (timeout >= 100) {
+            printf("Core 0: Timeout waiting for multiplication completion\n");
+        }
+        
+        // Calculate and store checksum
+        control->checksum = matrix_checksum(B);
+        printf("Core 0: Matrix B checksum after multiplication: %d\n", control->checksum);
+        
+        // Reset sync flags for next phase
+        for (int i = 0; i < control->num_cores; i++) {
+            control->sync_flags[i] = 0;
+        }
+        
+        // Memory barrier
+        __sync_synchronize();
+        
         // Signal start of phase 2
         control->phase = 2;
-        
-        // Reset sync flags
-        for (int i = 0; i < control->num_cores; i++) {
-            control->sync_flags[i] = 0;
-        }
     }
     
-    // Wait for phase 2 signal
-    while (control->phase != 2) delay(100);
-    
-    printf("Core %d: Starting matrix transpose (rows %d to %d)\n", 
-          core_id, start_row, end_row-1);
-    
-    // Perform transpose for assigned rows
-    matrix_transpose((Matrix*)C, (Matrix*)B, start_row, end_row);
-    
-    // Signal completion
-    control->sync_flags[core_id] = 2;
-    printf("Core %d: Matrix transpose complete\n", core_id);
-    
-    // Wait for all cores to complete transpose
-    all_ready = 0;
-    while (!all_ready) {
-        all_ready = 1;
-        for (int i = 0; i < control->num_cores; i++) {
-            if (control->sync_flags[i] != 2) {
-                all_ready = 0;
-                break;
-            }
-        }
-        if (!all_ready) delay(100);
+    // All cores wait for phase 2 signal
+    timeout = 0;
+    while (control->phase != 2 && timeout < 100) {
+        delay(1000);
+        timeout++;
     }
     
-    // Only core 0 calculates checksum
-    if (core_id == 0) {
-        printf("Core 0: Matrix B checksum (transpose result): %d\n", matrix_checksum((Matrix*)B));
+    if (timeout >= 100) {
+        printf("Core %d: Timeout waiting for phase 2 signal\n", core_id);
     }
     
-    // Phase 3: Matrix addition A = C + B
-    // Divide work among cores based on columns instead of rows
-    if (core_id == 0) {
-        // Signal start of phase 3
-        control->phase = 3;
-        
-        // Reset sync flags
-        for (int i = 0; i < control->num_cores; i++) {
-            control->sync_flags[i] = 0;
-        }
-    }
-    
-    // Wait for phase 3 signal
-    while (control->phase != 3) delay(100);
-    
-    // Calculate this core's portion for addition (by columns)
+    // Phase 2: Matrix transposition by columns
+    // Calculate column division
     int cols_per_core = SIZE / control->num_cores;
     int start_col = core_id * cols_per_core;
     int end_col = (core_id == control->num_cores - 1) ? SIZE : start_col + cols_per_core;
     
-    printf("Core %d: Starting matrix addition (columns %d to %d)\n", 
-          core_id, start_col, end_col-1);
+    printf("Core %d: Starting matrix transposition (columns %d to %d)\n", 
+           core_id, start_col, end_col-1);
     
     // Process assigned columns
-    for (int i = 0; i < SIZE; i++) {
-        for (int j = start_col; j < end_col; j++) {
-            A->data[i][j] = C->data[i][j] + B->data[i][j];
-            delay(1);  // Small delay for better coherence effects
-        }
-    }
-    
-    // Signal completion
-    control->sync_flags[core_id] = 3;
-    printf("Core %d: Matrix addition complete\n", core_id);
-    
-    // Wait for all cores to complete addition
-    all_ready = 0;
-    while (!all_ready) {
-        all_ready = 1;
-        for (int i = 0; i < control->num_cores; i++) {
-            if (control->sync_flags[i] != 3) {
-                all_ready = 0;
-                break;
+    for (int j = start_col; j < end_col; j++) {
+        for (int i = 0; i < SIZE; i++) {
+            // Only swap if i != j to avoid conflicts
+            if (i != j) {
+                int temp = B[i][j];
+                B[i][j] = B[j][i];
+                B[j][i] = temp;
             }
+            delay(1);
         }
-        if (!all_ready) delay(100);
     }
     
-    // Final checksum and completion
+    // Signal completion of phase 2
+    printf("Core %d: Matrix transposition complete\n", core_id);
+    control->sync_flags[core_id] = 2;
+    
+    // Core 0 calculates checksum and signals completion
     if (core_id == 0) {
-        printf("Core 0: All matrix operations complete\n");
-        printf("Core 0: Final result matrix A checksum: %d\n", matrix_checksum((Matrix*)A));
+        // Wait for all cores to complete transposition
+        timeout = 0;
+        all_ready = 0;
         
-        // Signal completion
-        control->phase = 4;
-    } else {
-        // Wait for final phase
-        while (control->phase != 4) delay(100);
-    }
-    
-    printf("Core %d: Matrix test completed\n", core_id);
-    return 0;
-}
-
-// Initialize matrix with a pattern
-void matrix_init(Matrix* M, int pattern) {
-    for (int i = 0; i < SIZE; i++) {
-        for (int j = 0; j < SIZE; j++) {
-            switch (pattern) {
-                case 1:  M->data[i][j] = i + j; break;         // Pattern 1: i+j
-                case 2:  M->data[i][j] = (i * j) % 10; break;  // Pattern 2: i*j mod 10
-                default: M->data[i][j] = 1; break;             // Default: all 1's
-            }
-        }
-    }
-}
-
-// Compute matrix multiplication using blocking for better cache behavior
-void matrix_multiply_blocked(Matrix* A, Matrix* B, Matrix* C, int start_row, int end_row) {
-    for (int i = start_row; i < end_row; i += BLOCK_SIZE) {
-        for (int j = 0; j < SIZE; j += BLOCK_SIZE) {
-            for (int k = 0; k < SIZE; k += BLOCK_SIZE) {
-                // Compute the block multiplication
-                for (int ii = i; ii < i + BLOCK_SIZE && ii < end_row; ii++) {
-                    for (int jj = j; jj < j + BLOCK_SIZE && jj < SIZE; jj++) {
-                        for (int kk = k; kk < k + BLOCK_SIZE && kk < SIZE; kk++) {
-                            C->data[ii][jj] += A->data[ii][kk] * B->data[kk][jj];
-                        }
-                        delay(1); // Small delay for better coherence effects
-                    }
+        while (!all_ready && timeout < 100) {
+            all_ready = 1;
+            
+            for (int i = 0; i < control->num_cores; i++) {
+                if (control->sync_flags[i] != 2) {
+                    all_ready = 0;
+                    break;
                 }
             }
+            
+            if (!all_ready) {
+                delay(1000);
+                timeout++;
+            }
         }
-    }
-}
-
-// Compute matrix transpose
-void matrix_transpose(Matrix* A, Matrix* B, int start_row, int end_row) {
-    for (int i = start_row; i < end_row; i++) {
-        for (int j = 0; j < SIZE; j++) {
-            B->data[j][i] = A->data[i][j];
-            delay(1); // Small delay for better coherence effects
+        
+        if (timeout >= 100) {
+            printf("Core 0: Timeout waiting for transposition completion\n");
         }
+        
+        // Calculate and store final checksum
+        control->checksum = matrix_checksum(B);
+        printf("Core 0: Matrix B final checksum: %d\n", control->checksum);
+        printf("Core 0: All matrix operations complete\n");
+        
+        // Signal completion
+        control->phase = 3;
     }
-}
-
-// Compute checksum of matrix (for validation)
-int matrix_checksum(Matrix* M) {
-    int sum = 0;
-    for (int i = 0; i < SIZE; i++) {
-        for (int j = 0; j < SIZE; j++) {
-            sum += M->data[i][j];
-        }
+    
+    // All cores wait for completion signal
+    timeout = 0;
+    while (control->phase != 3 && timeout < 100) {
+        delay(1000);
+        timeout++;
     }
-    return sum;
+    
+    if (timeout >= 100) {
+        printf("Core %d: Timeout waiting for completion signal\n", core_id);
+    } else {
+        printf("Core %d: All matrix operations completed successfully\n", core_id);
+    }
+    
+    return 0;
 }
