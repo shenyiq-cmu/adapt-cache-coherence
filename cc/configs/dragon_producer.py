@@ -18,7 +18,7 @@ system.cpu = [TimingSimpleCPU(cpu_id=i) for i in range(N)]
 # Create the Dragon cache coherence components
 system.serializing_bus = SerializingBus()
 system.dragon_cache = [DragonCache(
-    cacheId=i, 
+    cache_id=i, 
     serializing_bus=system.serializing_bus, 
     blockOffset=6,  # 64-byte blocks (2^6)
     setBit=4,       # 16 sets (2^4)
@@ -74,18 +74,3 @@ exit_event = m5.simulate()
 
 # Print results
 print(f"Exiting @ tick {m5.curTick()} because {exit_event.getCause()}")
-
-# Print cache statistics
-for i in range(N):
-    hits = system.dragon_cache[i].localStats.hitCount
-    misses = system.dragon_cache[i].localStats.missCount
-    total = hits + misses
-    hit_rate = (hits / total) * 100 if total > 0 else 0
-    
-    print(f"Dragon Cache {i} Statistics:")
-    print(f"  Hits: {hits}")
-    print(f"  Misses: {misses}")
-    print(f"  Hit Rate: {hit_rate:.2f}%")
-
-# Print bus statistics
-print(f"Bus Transactions: {system.serializing_bus.stats.transCount}")
