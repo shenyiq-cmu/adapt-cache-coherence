@@ -81,6 +81,8 @@ class SerializingBus : public SimObject {
 
     bool sharedWire = false;
 
+    bool remoteAccessWire = false;
+
     BusOperationType currBusOp = BusRd;
 
     // statistics

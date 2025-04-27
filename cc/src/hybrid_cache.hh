@@ -41,6 +41,7 @@ public:
         // for replacement, more like existence, should be the same
         // as found in tagMap
         bool valid;
+        bool accessSinceUpd;
         short invalidCounter;
     } cacheLine;
 

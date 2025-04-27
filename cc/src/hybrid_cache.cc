@@ -10,7 +10,8 @@ HybridCache::HybridCache(const HybridCacheParams& params)
     : CoherentCacheBase(params),
     blockOffset(params.blockOffset),
     setBit(params.setBit),
-    cacheSizeBit(params.cacheSizeBit) {
+    cacheSizeBit(params.cacheSizeBit),
+    invalidThreshold(params.invalidThreshold) {
     std::cerr << "Hybrid Cache " << cacheId << " created\n";
     DPRINTF(CCache, "Hybrid[%d] cache created\n", cacheId);
 
@@ -36,6 +37,7 @@ HybridCache::HybridCache(const HybridCacheParams& params)
             cacheline.valid = false;
             cacheline.cohState = HybridState::INVALID;
             cacheline.cacheBlock.resize(blockSize);
+            cacheline.invalidCounter = invalidThreshold;
         }
     }
 
@@ -105,6 +107,7 @@ int HybridCache::allocate(long addr) {
     cline.cohState = HybridState::INVALID;
     cline.valid = true;
     cline.tag = tag;
+    cline.invalidCounter = invalidThreshold;
     memset(&cline.cacheBlock[0], 0, blockSize);
 
     // update clk pointer of the circular array
@@ -204,6 +207,8 @@ void HybridCache::handleCoherentCpuReq(PacketPtr pkt) {
 
             // cache line update
             currCacheline.clkFlag = 1;
+
+            currCacheline.accessSinceUpd = true;
 
             // return the response packet to CPU
             sendCpuResp(pkt);
@@ -327,6 +332,7 @@ void HybridCache::handleCoherentBusGrant() {
     bool isWrite = requestPacket->isWrite();
     
     bus->sharedWire = false;
+    bus->remoteAccessWire = false;
 
     if (cacheHit) {
         cacheLine &currCacheline = HybridCacheMgr[setID].cacheSet[lineID];
@@ -336,20 +342,20 @@ void HybridCache::handleCoherentBusGrant() {
         if (currCacheline.cohState == HybridState::SHARED_CLEAN) {
             // Sc → Sm transition via PrWr(S')
             // std::cerr << "hybrid[" << cacheId << "] in Sc broadcast BudUpd on write\n";
-            DPRINTF(CCache, "hybrid[%d] in Sc broadcast BusUpd on write for addr %#x\n", 
-                    cacheId, addr);
+            DPRINTF(CCache, "hybrid[%d] in Sc broadcast %s on write for addr %#x\n", cacheId, 
+                (currCacheline.invalidCounter>0)? "BusUpd" : "BusRdX", addr);
             
-            // Send a BusUpd to notify other caches
-            bus->sendMemReq(requestPacket, false, BusUpd);
+            // Send a BusUpd to notify other caches if counter not 0, otherwise invalidate others
+            bus->sendMemReq(requestPacket, false, (currCacheline.invalidCounter>0)? BusUpd : BusRdX);
             
         }
         else if (currCacheline.cohState == HybridState::SHARED_MOD) {
             // std::cerr << "hybrid[" << cacheId << "] in Sm broadcast BudUpd on write\n";
-            DPRINTF(CCache, "hybrid[%d] in Sm broadcast BusUpd on write for addr %#x\n", 
-                    cacheId, addr);
+            DPRINTF(CCache, "hybrid[%d] in Sm broadcast %s on write for addr %#x\n", cacheId, 
+                (currCacheline.invalidCounter>0)? "BusUpd" : "BusRdX", addr);
             
-            // Send a BusUpd to notify other caches
-            bus->sendMemReq(requestPacket, false, BusUpd);
+            // Send a BusUpd to notify other caches if counter not 0, otherwise invalidate others
+            bus->sendMemReq(requestPacket, false, (currCacheline.invalidCounter>0)? BusUpd : BusRdX);
         }
 
     } else {
@@ -365,18 +371,17 @@ void HybridCache::handleCoherentBusGrant() {
             // will know shared after snooping
             // requestPacket = nullptr;
         } else if (isWrite) {
-            // PrWrMiss + transition to M - read for ownership (RFO)
-            // std::cerr << "hybrid[" << cacheId << "] sending PrWrMiss for write (RFO)\n";
-            DPRINTF(CCache, "hybrid[%d] write miss broadcast BusRd for addr %#x\n", 
-                    cacheId, addr);
+            // fixed invalid threshold for now
+            DPRINTF(CCache, "hybrid[%d] write miss broadcast %s for addr %#x\n",cacheId, 
+                (invalidThreshold>0)? "BusRdUpd" : "BusRdX", addr);
             
             // This will be handled in handleCoherentMemResp
             if(addr == blk_addr && size == blockSize){
                 // overwrite whole block
-                bus->sendMemReq(requestPacket, false, BusRdUpd);
+                bus->sendMemReq(requestPacket, false, (invalidThreshold>0)? BusRdUpd : BusRdX);
             }
             else{
-                bus->sendMemReq(requestPacket, true, BusRdUpd);
+                bus->sendMemReq(requestPacket, true, (invalidThreshold>0)? BusRdUpd : BusRdX);
             }
             
             // requestPacket = nullptr;
@@ -392,14 +397,6 @@ void HybridCache::handleCoherentMemResp(PacketPtr respPacket) {
     //           << " isResponse=" << pkt->isResponse() << " needsResponse=" << pkt->needsResponse() << "\n";
     DPRINTF(CCache, "hybrid[%d] mem resp: %s\n", cacheId, respPacket->print());
     
-    // // Check for reentrant call
-    // if (handling_memory_response) {
-    //     std::cerr << "hybrid[" << cacheId << "] WARNING: Reentrant memory response handling detected\n";
-    //     return;
-    // }
-    
-    // // Set flag to prevent reentrance
-    // handling_memory_response = true;
     
     int lineID;
     assert(requestPacket != nullptr);
@@ -426,20 +423,32 @@ void HybridCache::handleCoherentMemResp(PacketPtr respPacket) {
 
         if(currCacheline.cohState == HybridState::SHARED_CLEAN){
             // print trans info
-            if(bus->sharedWire)
+            if(bus->sharedWire){
                 DPRINTF(CCache, "STATE_PrWr: hybrid[%d] storing DATA at addr %#x, Shared_Clean to Shared_Mod\n", cacheId, addr);
-            else
+                // switch from other states to shared_mod -> have sent busupd
+                // first update, does exist interrupt
+                currCacheline.invalidCounter--;
+            }
+            else{
                 DPRINTF(CCache, "STATE_PrWr: hybrid[%d] storing DATA at addr %#x, Shared_Clean to Modified\n", cacheId, addr);
+
+            }
         }
         else{
-            if(bus->sharedWire)
+            if(bus->sharedWire){
                 DPRINTF(CCache, "STATE_PrWr: hybrid[%d] storing DATA at addr %#x, stay in Shared_Mod\n", cacheId, addr);
-            else
+                // have sent busupd
+                // it's not the first update, if there's remote access during two updates, reset counterR
+                if(bus->remoteAccessWire) currCacheline.invalidCounter = invalidThreshold;
+                currCacheline.invalidCounter--;
+            }
+            else{
                 DPRINTF(CCache, "STATE_PrWr: hybrid[%d] storing DATA at addr %#x, Shared_Mod to Modified\n", cacheId, addr);
+                // switch out from Sm
+                currCacheline.invalidCounter = invalidThreshold;
+            }
         }
-        
-        // BusOperationType opType = bus->getOperationType(pkt);
-        
+       
         currCacheline.cohState = bus->sharedWire ? HybridState::SHARED_MOD : HybridState::MODIFIED;
         currCacheline.dirty = true;
         currCacheline.clkFlag = 1;
@@ -462,7 +471,7 @@ void HybridCache::handleCoherentMemResp(PacketPtr respPacket) {
     }
 
     // if no hit, must be invalid
-    assert(lineID == NOT_EXIST);
+    // assert(lineID == NOT_EXIST);
 
     evict(addr);
 
@@ -509,6 +518,8 @@ void HybridCache::handleCoherentMemResp(PacketPtr respPacket) {
         }
         else{
             DPRINTF(CCache, "STATE_PrWr Miss: Hybrid[%d] write DATA and Invalid to Shared_Mod\n\n", cacheId);
+            // BusUpd has been sent on write Miss with shared
+            currCacheline.invalidCounter--;
         }
         printDataHex(&currCacheline.cacheBlock[0], blockSize);
 
@@ -560,7 +571,10 @@ void HybridCache::handleCoherentSnoopedReq(PacketPtr pkt) {
         currState = HybridCacheMgr[setID].cacheSet[lineID].cohState;
         cachelinePtr = &HybridCacheMgr[setID].cacheSet[lineID];
         // one or more caches have shared copies
-        bus->sharedWire = true;
+        // if bus command is invalidate, keep the share line low to get
+        // writer exclusive copy
+        bus->sharedWire = (opType != BusRdX);
+        bus->remoteAccessWire = cachelinePtr->accessSinceUpd;
     }
     
     switch(currState){
@@ -569,63 +583,104 @@ void HybridCache::handleCoherentSnoopedReq(PacketPtr pkt) {
 
             // flush
             assert(cachelinePtr->dirty);
-            assert(bus->hasBusRd(opType));
+            assert(bus->hasBusRd(opType) || opType == BusRdX);
             // TODO: writeback data
             writeback(addr, &cachelinePtr->cacheBlock[0]);
             cachelinePtr->dirty = false;
             
             DPRINTF(CCache, "hybrid[%d] snoop hit! Flush modified data\n\n", cacheId);
 
-            cachelinePtr->cohState = HybridState::SHARED_MOD;
-            DPRINTF(CCache, "STATE_BusRd: hybrid[%d] BusRd hit! set: %d, way: %d, tag: %d, Modified to Shared_Mod\n\n", cacheId, setID, lineID, tag);
-
-            if(!bus->hasBusUpd(opType)){
+            if(opType != BusRdX){
+                cachelinePtr->cohState = HybridState::SHARED_MOD;
+                DPRINTF(CCache, "STATE_BusRd: hybrid[%d] BusRd hit! set: %d, way: %d, tag: %d, Modified to Shared_Mod\n\n", cacheId, setID, lineID, tag);
+    
+                if(!bus->hasBusUpd(opType)){
+                    break;
+                }
+                // intentional fall through when update after rd
+            }
+            else{
+                cachelinePtr->cohState = HybridState::INVALID;
+                DPRINTF(CCache, "STATE_BusRdX: hybrid[%d] BusRd hit! set: %d, way: %d, tag: %d, Modified to Invalid\n\n", cacheId, setID, lineID, tag);
                 break;
             }
 
-            // intentional fall through when update after rd
 
         case HybridState::SHARED_MOD:
 
             // may or may not be synced with memory
             // can be busrd, bsupd or together
+            if(opType != BusRdX){
+                if(bus->hasBusRd(opType) && cachelinePtr->dirty){
+                    writeback(addr, &cachelinePtr->cacheBlock[0]);
+                    cachelinePtr->dirty = false;
+                    DPRINTF(CCache, "hybrid[%d] snoop hit! Flush shared modified data\n\n", cacheId);
+                }
+    
+                if(bus->hasBusUpd(opType)){
+                    assert(pkt->isWrite());
+                    pkt->writeDataToBlock(&cachelinePtr->cacheBlock[0], blockSize);
+                    cachelinePtr->cohState = HybridState::SHARED_CLEAN;
+                    cachelinePtr->accessSinceUpd = false;
+                    DPRINTF(CCache, "STATE_BusUpd: hybrid[%d] BusUpd hit! set: %d, way: %d, tag: %d, Shared_Mod to Shared_Clean\n\n", cacheId, setID, lineID, tag);
+                }
+    
+            }
+            else{
+                if(cachelinePtr->dirty){
+                    writeback(addr, &cachelinePtr->cacheBlock[0]);
+                    cachelinePtr->dirty = false;
+                    DPRINTF(CCache, "hybrid[%d] snoop hit! Flush shared modified data\n\n", cacheId);
+                }
 
-            if(bus->hasBusRd(opType) && cachelinePtr->dirty){
-                writeback(addr, &cachelinePtr->cacheBlock[0]);
-                cachelinePtr->dirty = false;
-                DPRINTF(CCache, "hybrid[%d] snoop hit! Flush shared modified data\n\n", cacheId);
+                cachelinePtr->cohState = HybridState::INVALID;
+                    DPRINTF(CCache, "STATE_BusUpd: hybrid[%d] BusRdX hit! set: %d, way: %d, tag: %d, Shared_Mod to Invalid\n\n", cacheId, setID, lineID, tag);
+                
             }
 
-            if(bus->hasBusUpd(opType)){
-                assert(pkt->isWrite());
-                pkt->writeDataToBlock(&cachelinePtr->cacheBlock[0], blockSize);
-                cachelinePtr->cohState = HybridState::SHARED_CLEAN;
-                DPRINTF(CCache, "STATE_BusUpd: hybrid[%d] BusUpd hit! set: %d, way: %d, tag: %d, Shared_Mod to Shared_Clean\n\n", cacheId, setID, lineID, tag);
-            }
+            // no matter what bus operation it is, an bus signal interrupt restores the original writer's counter
+            cachelinePtr->invalidCounter = invalidThreshold;
+
 
             break;
 
         case HybridState::EXCLUSIVE:
 
             assert(!cachelinePtr->dirty);
-            assert(bus->hasBusRd(opType));
+            assert(bus->hasBusRd(opType) || opType == BusRdX);
 
-            cachelinePtr->cohState = HybridState::SHARED_CLEAN;
-            DPRINTF(CCache, "STATE_BusRd: hybrid[%d] BusRd hit! set: %d, way: %d, tag: %d, Exclusive to Shared_Clean\n\n", cacheId, setID, lineID, tag);
+            if(opType != BusRdX){
+                cachelinePtr->cohState = HybridState::SHARED_CLEAN;
+                DPRINTF(CCache, "STATE_BusRd: hybrid[%d] BusRd hit! set: %d, way: %d, tag: %d, Exclusive to Shared_Clean\n\n", cacheId, setID, lineID, tag);
 
-            if(!bus->hasBusUpd(opType)){
-                break;
+                if(!bus->hasBusUpd(opType)){
+                    break;
+                }
             }
+            else{
+                cachelinePtr->cohState = HybridState::INVALID;
+                DPRINTF(CCache, "STATE_BusRd: hybrid[%d] BusRdX hit! set: %d, way: %d, tag: %d, Exclusive to Invalid\n\n", cacheId, setID, lineID, tag);
+            }
+
+
 
             // intentional fall through when update after rd
 
         case HybridState::SHARED_CLEAN:
 
-            if(bus->hasBusUpd(opType)){
-                assert(pkt->isWrite());
-                pkt->writeDataToBlock(&cachelinePtr->cacheBlock[0], blockSize);
-                DPRINTF(CCache, "STATE_BusUpd: hybrid[%d] BusUpd hit! set: %d, way: %d, tag: %d, stay in Shared_Clean\n\n", cacheId, setID, lineID, tag);
+            if(opType != BusRdX){
+                if(bus->hasBusUpd(opType)){
+                    assert(pkt->isWrite());
+                    pkt->writeDataToBlock(&cachelinePtr->cacheBlock[0], blockSize);
+                    cachelinePtr->accessSinceUpd = false;
+                    DPRINTF(CCache, "STATE_BusUpd: hybrid[%d] BusUpd hit! set: %d, way: %d, tag: %d, stay in Shared_Clean\n\n", cacheId, setID, lineID, tag);
+                }
             }
+            else{
+                cachelinePtr->cohState = HybridState::INVALID;
+                DPRINTF(CCache, "STATE_BusRd: hybrid[%d] BusRdX hit! set: %d, way: %d, tag: %d, Shared_Clean to Invalid\n\n", cacheId, setID, lineID, tag);
+            }
+
 
             break;
 
