@@ -20,16 +20,19 @@ system.cpu = [TimingSimpleCPU(cpu_id=i) for i in range(N)]
 # Create the Dragon cache coherence components
 system.serializing_bus = SerializingBus()
 
-# Configure Dragon caches with parameters optimized for matrix operations:
-# - Moderately sized caches
-# - Block size aligned with matrix access patterns
-# - Number of sets to balance capacity and associativity
+# Configure Dragon caches with extremely poor parameters to maximize misses:
+# - Tiny cache size (1KB)
+# - Very few sets (2)
+# - Tiny blocks (8 bytes)
+# This ensures we get continuous cache misses throughout the test
 system.dragon_cache = [AdaptCache(
     cache_id=i, 
     serializing_bus=system.serializing_bus, 
-    blockOffset=4,  # 16-byte blocks
-    setBit=0,       # 1 sets
-    cacheSizeBit=10, # 1KB cache
+    blockOffset=3,  # 8-byte blocks (tiny blocks generate more misses)
+    setBit=1,       # 2 sets (almost guaranteed conflicts)
+    cacheSizeBit=10, # 1KB cache (extremely small)
+    invalidThreshold=0, # 1KB cache (extremely small)
+    invalidationRatio=2
 ) for i in range(N)]
 
 # Create the memory bus
@@ -68,14 +71,15 @@ for i in range(N):
 root = Root(full_system=False, system=system)
 m5.instantiate()
 
-# Map shared memory region - need more space for matrices (16KB)
+# Map shared memory region (we need more memory for the continuous miss test)
+# Map 8KB of shared memory instead of just 4KB
 for i in range(N):
-    processes[i].map(4096*8, 4096*8, 4096*2, cacheable=True)
+    processes[i].map(4096*8, 4096*8, 8192, cacheable=True)
 
 # Reset stats before simulation
 m5.stats.reset()
 
-print("Beginning simulation of Dragon protocol matrix benchmark!")
+print("Beginning simulation of Dragon protocol continuous miss benchmark!")
 
 # Run simulation without limits
 exit_event = m5.simulate()

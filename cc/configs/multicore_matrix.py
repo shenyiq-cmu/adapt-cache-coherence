@@ -21,7 +21,7 @@ system.cpu = [TimingSimpleCPU(cpu_id=i) for i in range(N)]
 system.serializing_bus = SerializingBus()
 
 # Configure Dragon caches
-system.dragon_cache = [HybridCache(
+system.dragon_cache = [AdaptCache(
     cache_id=i, 
     serializing_bus=system.serializing_bus, 
     blockOffset=4,  # 16-byte blocks

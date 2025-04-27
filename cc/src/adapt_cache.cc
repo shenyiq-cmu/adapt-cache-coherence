@@ -3,6 +3,8 @@
 #include "debug/CCache.hh"
 #include <iostream>
 #define NOT_EXIST -1
+#define SHARED_MEM_START 0x8000
+#define SHARED_MEM_END 0xa000
 
 namespace gem5 {
 
@@ -11,7 +13,8 @@ AdaptCache::AdaptCache(const AdaptCacheParams& params)
     blockOffset(params.blockOffset),
     setBit(params.setBit),
     cacheSizeBit(params.cacheSizeBit),
-    invalidThreshold(params.invalidThreshold) {
+    invalidThreshold(params.invalidThreshold),
+    invalidationRatio(params.invalidationRatio) {
     std::cerr << "Adapt Cache " << cacheId << " created\n";
     DPRINTF(CCache, "Adapt[%d] cache created\n", cacheId);
 
@@ -38,12 +41,20 @@ AdaptCache::AdaptCache(const AdaptCacheParams& params)
             cacheline.cohState = AdaptState::INVALID;
             cacheline.cacheBlock.resize(blockSize);
             cacheline.invalidCounter = invalidThreshold;
+            cacheline.writeRunCounter = 0;
         }
     }
 
     dataToWrite.resize(blockSize);
 
     bus->cacheBlockSize = blockSize;
+
+    if(bus->invalidationThs.empty()){
+        bus->invalidationThs.resize((SHARED_MEM_END - SHARED_MEM_START)/blockSize);
+        for(auto& T : bus->invalidationThs){
+            T = invalidThreshold;
+        }
+    }
 }
 
 
@@ -72,6 +83,22 @@ uint64_t AdaptCache::constructAddr(uint64_t tag, uint64_t set, uint64_t blkOffse
  
     return ((tag << (blockOffset+setBit)) | (set << blockOffset)) | blkOffset;
 
+}
+
+uint64_t AdaptCache::getBlkNumber(long addr){
+    return (addr >> blockOffset) - (SHARED_MEM_START >> blockOffset);
+}
+
+void AdaptCache::endWriteRun(long addr, int& currWriteRun){
+    if(currWriteRun < invalidationRatio){
+        bus->invalidationThs[getBlkNumber(addr)]++;
+        DPRINTF(CCache, "adapt[%d] Write Run ends at %d for %#x, inv threshold increase\n\n", cacheId, currWriteRun, addr);
+    }
+    else{
+        bus->invalidationThs[getBlkNumber(addr)]--;
+        DPRINTF(CCache, "adapt[%d] Write Run ends at %d for %#x, inv threshold increase\n\n", cacheId, currWriteRun, addr);
+    }
+    currWriteRun = 0;
 }
 
 bool AdaptCache::isHit(long addr, int &lineID) {
@@ -107,7 +134,8 @@ int AdaptCache::allocate(long addr) {
     cline.cohState = AdaptState::INVALID;
     cline.valid = true;
     cline.tag = tag;
-    cline.invalidCounter = invalidThreshold;
+    cline.invalidCounter = bus->invalidationThs[getBlkNumber(addr)];
+    cline.writeRunCounter = 0;
     memset(&cline.cacheBlock[0], 0, blockSize);
 
     // update clk pointer of the circular array
@@ -149,6 +177,11 @@ void AdaptCache::evict(long addr) {
 
             // need to erase from map
             setMgr.tagMap.erase(cline.tag);
+
+            // record write run and update Ths
+            endWriteRun(addr, cline.writeRunCounter);
+            // allocate will reset writeRunCounter
+
 
             cline.valid = false;
             // other fields reset by allocate
@@ -230,6 +263,8 @@ void AdaptCache::handleCoherentCpuReq(PacketPtr pkt) {
                     pkt->writeDataToBlock(&currCacheline.cacheBlock[0], blockSize);
                     currCacheline.dirty = true;
                     currCacheline.clkFlag = 1;
+                    // update write run when write exclusively
+                    currCacheline.writeRunCounter++;
     
                     pkt->makeResponse();
                                     
@@ -248,6 +283,8 @@ void AdaptCache::handleCoherentCpuReq(PacketPtr pkt) {
                     pkt->writeDataToBlock(&currCacheline.cacheBlock[0], blockSize);
                     assert(currCacheline.dirty == true);
                     currCacheline.clkFlag = 1;
+                    // update write run when write exclusively
+                    currCacheline.writeRunCounter++;
     
                     pkt->makeResponse();
                                     
@@ -373,15 +410,15 @@ void AdaptCache::handleCoherentBusGrant() {
         } else if (isWrite) {
             // fixed invalid threshold for now
             DPRINTF(CCache, "adapt[%d] write miss broadcast %s for addr %#x\n",cacheId, 
-                (invalidThreshold>0)? "BusRdUpd" : "BusRdX", addr);
+                (bus->invalidationThs[getBlkNumber(addr)]>0)? "BusRdUpd" : "BusRdX", addr);
             
             // This will be handled in handleCoherentMemResp
             if(addr == blk_addr && size == blockSize){
                 // overwrite whole block
-                bus->sendMemReq(requestPacket, false, (invalidThreshold>0)? BusRdUpd : BusRdX);
+                bus->sendMemReq(requestPacket, false, (bus->invalidationThs[getBlkNumber(addr)]>0)? BusRdUpd : BusRdX);
             }
             else{
-                bus->sendMemReq(requestPacket, true, (invalidThreshold>0)? BusRdUpd : BusRdX);
+                bus->sendMemReq(requestPacket, true, (bus->invalidationThs[getBlkNumber(addr)]>0)? BusRdUpd : BusRdX);
             }
             
             // requestPacket = nullptr;
@@ -423,6 +460,10 @@ void AdaptCache::handleCoherentMemResp(PacketPtr respPacket) {
 
         if(currCacheline.cohState == AdaptState::SHARED_CLEAN){
             // print trans info
+            // starting a write run
+            assert(currCacheline.writeRunCounter == 0);
+            currCacheline.writeRunCounter++;
+
             if(bus->sharedWire){
                 DPRINTF(CCache, "STATE_PrWr: adapt[%d] storing DATA at addr %#x, Shared_Clean to Shared_Mod\n", cacheId, addr);
                 // switch from other states to shared_mod -> have sent busupd
@@ -439,13 +480,24 @@ void AdaptCache::handleCoherentMemResp(PacketPtr respPacket) {
                 DPRINTF(CCache, "STATE_PrWr: adapt[%d] storing DATA at addr %#x, stay in Shared_Mod\n", cacheId, addr);
                 // have sent busupd
                 // it's not the first update, if there's remote access during two updates, reset counterR
-                if(bus->remoteAccessWire) currCacheline.invalidCounter = invalidThreshold;
+                if(bus->remoteAccessWire){
+                    // remote access interrupt write run
+                    endWriteRun(addr, currCacheline.writeRunCounter);
+                    // currCacheline.writeRunCounter = 0;
+                    
+                    // update invalid th
+                    currCacheline.invalidCounter = bus->invalidationThs[getBlkNumber(addr)];
+                } 
                 currCacheline.invalidCounter--;
+                currCacheline.writeRunCounter++;
             }
             else{
                 DPRINTF(CCache, "STATE_PrWr: adapt[%d] storing DATA at addr %#x, Shared_Mod to Modified\n", cacheId, addr);
                 // switch out from Sm
-                currCacheline.invalidCounter = invalidThreshold;
+                // reset to corresponding one
+                currCacheline.invalidCounter = bus->invalidationThs[getBlkNumber(addr)];
+                // write run continues to Modified
+                currCacheline.writeRunCounter++;
             }
         }
        
@@ -473,9 +525,12 @@ void AdaptCache::handleCoherentMemResp(PacketPtr respPacket) {
     // if no hit, must be invalid
     // assert(lineID == NOT_EXIST);
 
-    evict(addr);
+    if(lineID == NOT_EXIST){
+        evict(addr);
 
-    lineID = allocate(addr);
+        lineID = allocate(addr);
+    }
+
     cacheLine &currCacheline = AdaptCacheMgr[setID].cacheSet[lineID];
     assert(currCacheline.cohState == AdaptState::INVALID);
     assert(currCacheline.valid);
@@ -507,6 +562,9 @@ void AdaptCache::handleCoherentMemResp(PacketPtr respPacket) {
         currCacheline.dirty = true;
         currCacheline.clkFlag = 1;
         bus->sharedWire = false;
+        assert(currCacheline.writeRunCounter == 0);
+        // starting a write run
+        currCacheline.writeRunCounter++;
 
         if(memoryFetch){
             respPacket->writeDataToBlock(&currCacheline.cacheBlock[0], blockSize);
@@ -590,6 +648,9 @@ void AdaptCache::handleCoherentSnoopedReq(PacketPtr pkt) {
             
             DPRINTF(CCache, "adapt[%d] snoop hit! Flush modified data\n\n", cacheId);
 
+            // Update write run
+            endWriteRun(addr, cachelinePtr->writeRunCounter);
+
             if(opType != BusRdX){
                 cachelinePtr->cohState = AdaptState::SHARED_MOD;
                 DPRINTF(CCache, "STATE_BusRd: adapt[%d] BusRd hit! set: %d, way: %d, tag: %d, Modified to Shared_Mod\n\n", cacheId, setID, lineID, tag);
@@ -604,6 +665,7 @@ void AdaptCache::handleCoherentSnoopedReq(PacketPtr pkt) {
                 DPRINTF(CCache, "STATE_BusRdX: adapt[%d] BusRd hit! set: %d, way: %d, tag: %d, Modified to Invalid\n\n", cacheId, setID, lineID, tag);
                 break;
             }
+
 
 
         case AdaptState::SHARED_MOD:
@@ -621,6 +683,7 @@ void AdaptCache::handleCoherentSnoopedReq(PacketPtr pkt) {
                     assert(pkt->isWrite());
                     pkt->writeDataToBlock(&cachelinePtr->cacheBlock[0], blockSize);
                     cachelinePtr->cohState = AdaptState::SHARED_CLEAN;
+                    cachelinePtr->dirty = false;
                     cachelinePtr->accessSinceUpd = false;
                     DPRINTF(CCache, "STATE_BusUpd: adapt[%d] BusUpd hit! set: %d, way: %d, tag: %d, Shared_Mod to Shared_Clean\n\n", cacheId, setID, lineID, tag);
                 }
@@ -639,7 +702,14 @@ void AdaptCache::handleCoherentSnoopedReq(PacketPtr pkt) {
             }
 
             // no matter what bus operation it is, an bus signal interrupt restores the original writer's counter
-            cachelinePtr->invalidCounter = invalidThreshold;
+            if(cachelinePtr->writeRunCounter > 0){
+                // prevent double update from the fall off
+                endWriteRun(addr, cachelinePtr->writeRunCounter);
+            }
+            
+            // currCacheline.writeRunCounter = 0;
+            // update invalidTH
+            cachelinePtr->invalidCounter = bus->invalidationThs[getBlkNumber(addr)];
 
 
             break;
@@ -648,6 +718,7 @@ void AdaptCache::handleCoherentSnoopedReq(PacketPtr pkt) {
 
             assert(!cachelinePtr->dirty);
             assert(bus->hasBusRd(opType) || opType == BusRdX);
+            assert(cachelinePtr->writeRunCounter == 0);
 
             if(opType != BusRdX){
                 cachelinePtr->cohState = AdaptState::SHARED_CLEAN;
@@ -667,6 +738,8 @@ void AdaptCache::handleCoherentSnoopedReq(PacketPtr pkt) {
             // intentional fall through when update after rd
 
         case AdaptState::SHARED_CLEAN:
+
+            assert(cachelinePtr->writeRunCounter == 0);
 
             if(opType != BusRdX){
                 if(bus->hasBusUpd(opType)){

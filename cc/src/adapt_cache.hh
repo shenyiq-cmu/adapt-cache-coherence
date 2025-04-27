@@ -42,7 +42,8 @@ public:
         // as found in tagMap
         bool valid;
         bool accessSinceUpd;
-        short invalidCounter;
+        int invalidCounter;
+        int writeRunCounter;
     } cacheLine;
 
     typedef struct CacheSetMgr{
@@ -70,7 +71,8 @@ public:
     int cacheSizeBit = 15;
     int cacheSize = 32 * 1024;
     int numLines;
-    short invalidThreshold;
+    int invalidThreshold;
+    int invalidationRatio;
 
     std::vector<cacheSetMgr> AdaptCacheMgr;
 
@@ -83,6 +85,8 @@ public:
     void printDataHex(uint8_t* data, int length);
     uint64_t getBlkAddr(long addr);
     uint64_t constructAddr(uint64_t tag, uint64_t set, uint64_t blkOffset);
+    uint64_t getBlkNumber(long addr);
+    void endWriteRun(long addr, int& currWriteRun);
 
     AdaptCache(const AdaptCacheParams &params);
 

@@ -8,6 +8,7 @@
 #include <map>
 #include <unordered_set>
 #include <tuple>
+#include <vector>
 
 namespace gem5 {
 
@@ -84,6 +85,8 @@ class SerializingBus : public SimObject {
     bool remoteAccessWire = false;
 
     BusOperationType currBusOp = BusRd;
+
+    std::vector<int> invalidationThs;
 
     // statistics
 
