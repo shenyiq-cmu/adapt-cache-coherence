@@ -350,11 +350,12 @@ void AdaptCache::handleCoherentBusGrant() {
     assert(cacheId == bus->currentGranted);
 
     // stats collect start
-    bus->stats.transCount++;
+    // bus->stats.transCount++;
 
-    DPRINTF(CCache, "adapt[%d] bus granted, transaction #%d\n\n", cacheId, bus->stats.transCount);
+    // DPRINTF(CCache, "adapt[%d] bus granted, transaction #%d\n\n", cacheId, bus->stats.transCount);
 
-    
+    DPRINTF(CCache, "adapt[%d] bus granted\n\n", cacheId);
+
     uint64_t addr = requestPacket->getAddr();
     uint64_t blk_addr = requestPacket->getBlockAddr(blockSize);
     uint64_t size = requestPacket->getSize();
@@ -367,6 +368,8 @@ void AdaptCache::handleCoherentBusGrant() {
 
     bool isRead = requestPacket->isRead() && !requestPacket->isWrite();
     bool isWrite = requestPacket->isWrite();
+
+    BusOperationType busOp;
     
     bus->sharedWire = false;
     bus->remoteAccessWire = false;
@@ -375,6 +378,8 @@ void AdaptCache::handleCoherentBusGrant() {
         cacheLine &currCacheline = AdaptCacheMgr[setID].cacheSet[lineID];
         assert(isWrite && (currCacheline.cohState == AdaptState::SHARED_CLEAN || currCacheline.cohState == AdaptState::SHARED_MOD));
         // We had a hit but needed the bus (e.g., for write to shared line)
+
+        busOp = (currCacheline.invalidCounter>0)? BusUpd : BusRdX;
 
         if (currCacheline.cohState == AdaptState::SHARED_CLEAN) {
             // Sc → Sm transition via PrWr(S')
@@ -403,6 +408,8 @@ void AdaptCache::handleCoherentBusGrant() {
             DPRINTF(CCache, "adapt[%d] read miss broadcast BusRd for addr %#x\n", 
                     cacheId, addr);
             
+            busOp = BusRd;
+
             // This will be handled in handleCoherentMemResp
             bus->sendMemReq(requestPacket, true, BusRd);
             // will know shared after snooping
@@ -411,6 +418,8 @@ void AdaptCache::handleCoherentBusGrant() {
             // fixed invalid threshold for now
             DPRINTF(CCache, "adapt[%d] write miss broadcast %s for addr %#x\n",cacheId, 
                 (bus->invalidationThs[getBlkNumber(addr)]>0)? "BusRdUpd" : "BusRdX", addr);
+
+            busOp = (bus->invalidationThs[getBlkNumber(addr)]>0)? BusRdUpd : BusRdX;
             
             // This will be handled in handleCoherentMemResp
             if(addr == blk_addr && size == blockSize){
@@ -424,6 +433,9 @@ void AdaptCache::handleCoherentBusGrant() {
             // requestPacket = nullptr;
         }
     }
+
+    busStatsUpdate(busOp, requestPacket->getSize());
+
 }
 
 // // Track if we're already handling a memory response to prevent reentrant calls
@@ -642,8 +654,10 @@ void AdaptCache::handleCoherentSnoopedReq(PacketPtr pkt) {
             // flush
             assert(cachelinePtr->dirty);
             assert(bus->hasBusRd(opType) || opType == BusRdX);
-            // TODO: writeback data
+            // writeback data
             writeback(addr, &cachelinePtr->cacheBlock[0]);
+            // bus stats record flush data
+            bus->stats.rdBytes += blockSize;
             cachelinePtr->dirty = false;
             
             DPRINTF(CCache, "adapt[%d] snoop hit! Flush modified data\n\n", cacheId);
@@ -675,6 +689,8 @@ void AdaptCache::handleCoherentSnoopedReq(PacketPtr pkt) {
             if(opType != BusRdX){
                 if(bus->hasBusRd(opType) && cachelinePtr->dirty){
                     writeback(addr, &cachelinePtr->cacheBlock[0]);
+                    // bus stats record flush data
+                    bus->stats.rdBytes += blockSize;
                     cachelinePtr->dirty = false;
                     DPRINTF(CCache, "adapt[%d] snoop hit! Flush shared modified data\n\n", cacheId);
                 }
@@ -692,6 +708,8 @@ void AdaptCache::handleCoherentSnoopedReq(PacketPtr pkt) {
             else{
                 if(cachelinePtr->dirty){
                     writeback(addr, &cachelinePtr->cacheBlock[0]);
+                    // bus stats record flush data
+                    bus->stats.rdBytes += blockSize;
                     cachelinePtr->dirty = false;
                     DPRINTF(CCache, "adapt[%d] snoop hit! Flush shared modified data\n\n", cacheId);
                 }

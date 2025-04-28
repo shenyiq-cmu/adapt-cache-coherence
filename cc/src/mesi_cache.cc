@@ -279,8 +279,10 @@ void MesiCache::handleCoherentCpuReq(PacketPtr pkt) {
 void MesiCache::handleCoherentBusGrant() {
 
     // stats collect start
-    bus->stats.transCount++;
-    DPRINTF(CCache, "Mesi[%d] bus granted, transaction #%d\n\n", cacheId, bus->stats.transCount);
+    // bus->stats.transCount++;
+    // DPRINTF(CCache, "Mesi[%d] bus granted, transaction #%d\n\n", cacheId, bus->stats.transCount);
+
+    DPRINTF(CCache, "Mesi[%d] bus granted\n\n", cacheId);
     //std::cerr<< "cache: "<<cacheId<<"handleCOhbusgrant"<<std::endl;
     // your implementation here. See MiCache/MsiCache for reference.
     assert(requestPacket != nullptr);
@@ -299,6 +301,7 @@ void MesiCache::handleCoherentBusGrant() {
     uint64_t setID = getSet(addr);
     uint64_t tag = getTag(addr);
     bool cacheHit = isHit(addr, lineID);
+    BusOperationType busOp;
     // cacheHit means a transition from shared to modified
 
     if(requestPacket->isRead()){
@@ -311,6 +314,8 @@ void MesiCache::handleCoherentBusGrant() {
     bus->sharedWire = false;
 
     bool isRead = requestPacket->isRead();
+
+    busOp = (isRead)? BusRd : BusRdX;
 
     if((addr == blk_addr && size == blockSize) || cacheHit){
         
@@ -334,6 +339,8 @@ void MesiCache::handleCoherentBusGrant() {
         bus->sendMemReq(requestPacket, true, (isRead)? BusRd : BusRdX);
     
     }
+
+   busStatsUpdate(busOp, requestPacket->getSize());
 
 
 }
@@ -532,8 +539,11 @@ void MesiCache::handleCoherentSnoopedReq(PacketPtr pkt) {
 
             // flush
             assert(cachelinePtr->dirty);
-            // TODO: writeback data
+            // writeback data
             writeback(addr, &cachelinePtr->cacheBlock[0]);
+            // bus stats record flush data
+            bus->stats.rdBytes += blockSize;
+
             cachelinePtr->dirty = false;
             DPRINTF(CCache, "Mesi[%d] snoop hit! Flush modified data\n\n", cacheId);
 

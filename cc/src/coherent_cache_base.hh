@@ -82,6 +82,8 @@ class CoherentCacheBase : public SimObject {
     virtual void handleCoherentMemResp(PacketPtr pkt);
     virtual void handleCoherentSnoopedReq(PacketPtr pkt);
 
+    void busStatsUpdate(BusOperationType busop, int dataSize);
+
     virtual ~CoherentCacheBase() {}
 };
 }

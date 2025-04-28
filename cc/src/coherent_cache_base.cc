@@ -18,6 +18,35 @@ void CoherentCacheBase::init() {
     bus->registerCache(cacheId, this);
 }
 
+void CoherentCacheBase::busStatsUpdate(BusOperationType busop, int dataSize){
+    switch(busop){
+        case BusRdX:
+            bus->stats.rdxCount++;
+            bus->stats.transCount++;
+            break;
+        
+        case BusRd:
+            bus->stats.rdCount++;
+            bus->stats.transCount++;
+            break;
+
+        case BusUpd:
+            bus->stats.updCount++;
+            bus->stats.transCount++;
+            bus->stats.updBytes += dataSize;
+            break;
+
+        case BusRdUpd:
+            bus->stats.updCount++;
+            bus->stats.rdCount++;
+            bus->stats.transCount += 2;
+            bus->stats.updBytes += dataSize;
+            break;
+    }
+    DPRINTF(CCache, "BUS: total transaction #%d, busrdx: #%d, busrd: #%d, busupd: #%d, read(flush) bytes: %d, update bytes: %d\n\n", 
+        bus->stats.transCount, bus->stats.rdxCount, bus->stats.rdCount, bus->stats.updCount, bus->stats.rdBytes, bus->stats.updBytes);
+}
+
 void CoherentCacheBase::processCpuResp() {
     while(!(cpuRespQueue.size() == 0)) {
         auto first = cpuRespQueue.begin();

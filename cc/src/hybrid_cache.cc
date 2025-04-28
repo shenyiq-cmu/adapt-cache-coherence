@@ -313,10 +313,11 @@ void HybridCache::handleCoherentBusGrant() {
     assert(cacheId == bus->currentGranted);
 
     // stats collect start
-    bus->stats.transCount++;
+    // bus->stats.transCount++;
 
-    DPRINTF(CCache, "hybrid[%d] bus granted, transaction #%d\n\n", cacheId, bus->stats.transCount);
+    // DPRINTF(CCache, "hybrid[%d] bus granted, transaction #%d\n\n", cacheId, bus->stats.transCount);
 
+    DPRINTF(CCache, "hybrid[%d] bus granted\n\n", cacheId);
     
     uint64_t addr = requestPacket->getAddr();
     uint64_t blk_addr = requestPacket->getBlockAddr(blockSize);
@@ -330,6 +331,8 @@ void HybridCache::handleCoherentBusGrant() {
 
     bool isRead = requestPacket->isRead() && !requestPacket->isWrite();
     bool isWrite = requestPacket->isWrite();
+
+    BusOperationType busOp;
     
     bus->sharedWire = false;
     bus->remoteAccessWire = false;
@@ -338,6 +341,8 @@ void HybridCache::handleCoherentBusGrant() {
         cacheLine &currCacheline = HybridCacheMgr[setID].cacheSet[lineID];
         assert(isWrite && (currCacheline.cohState == HybridState::SHARED_CLEAN || currCacheline.cohState == HybridState::SHARED_MOD));
         // We had a hit but needed the bus (e.g., for write to shared line)
+
+        busOp = (currCacheline.invalidCounter>0)? BusUpd : BusRdX;
 
         if (currCacheline.cohState == HybridState::SHARED_CLEAN) {
             // Sc → Sm transition via PrWr(S')
@@ -365,6 +370,8 @@ void HybridCache::handleCoherentBusGrant() {
             // std::cerr << "hybrid[" << cacheId << "] sending BusRd\n";
             DPRINTF(CCache, "hybrid[%d] read miss broadcast BusRd for addr %#x\n", 
                     cacheId, addr);
+
+            busOp = BusRd;
             
             // This will be handled in handleCoherentMemResp
             bus->sendMemReq(requestPacket, true, BusRd);
@@ -374,6 +381,8 @@ void HybridCache::handleCoherentBusGrant() {
             // fixed invalid threshold for now
             DPRINTF(CCache, "hybrid[%d] write miss broadcast %s for addr %#x\n",cacheId, 
                 (invalidThreshold>0)? "BusRdUpd" : "BusRdX", addr);
+
+            busOp = (invalidThreshold>0)? BusRdUpd : BusRdX;
             
             // This will be handled in handleCoherentMemResp
             if(addr == blk_addr && size == blockSize){
@@ -387,6 +396,9 @@ void HybridCache::handleCoherentBusGrant() {
             // requestPacket = nullptr;
         }
     }
+
+    busStatsUpdate(busOp, requestPacket->getSize());
+
 }
 
 // // Track if we're already handling a memory response to prevent reentrant calls
@@ -590,6 +602,8 @@ void HybridCache::handleCoherentSnoopedReq(PacketPtr pkt) {
             assert(bus->hasBusRd(opType) || opType == BusRdX);
             // TODO: writeback data
             writeback(addr, &cachelinePtr->cacheBlock[0]);
+            // bus stats record flush data
+            bus->stats.rdBytes += blockSize;
             cachelinePtr->dirty = false;
             
             DPRINTF(CCache, "hybrid[%d] snoop hit! Flush modified data\n\n", cacheId);
@@ -617,6 +631,9 @@ void HybridCache::handleCoherentSnoopedReq(PacketPtr pkt) {
             if(opType != BusRdX){
                 if(bus->hasBusRd(opType) && cachelinePtr->dirty){
                     writeback(addr, &cachelinePtr->cacheBlock[0]);
+                    // bus stats record flush data
+                    bus->stats.rdBytes += blockSize;
+
                     cachelinePtr->dirty = false;
                     DPRINTF(CCache, "hybrid[%d] snoop hit! Flush shared modified data\n\n", cacheId);
                 }
@@ -634,6 +651,9 @@ void HybridCache::handleCoherentSnoopedReq(PacketPtr pkt) {
             else{
                 if(cachelinePtr->dirty){
                     writeback(addr, &cachelinePtr->cacheBlock[0]);
+                    // bus stats record flush data
+                    bus->stats.rdBytes += blockSize;
+
                     cachelinePtr->dirty = false;
                     DPRINTF(CCache, "hybrid[%d] snoop hit! Flush shared modified data\n\n", cacheId);
                 }

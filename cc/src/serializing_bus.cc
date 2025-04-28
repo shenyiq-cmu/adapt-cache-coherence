@@ -11,7 +11,14 @@ SerializingBus::SerializingBus(const SerializingBusParams& params)
       memPort(params.name + ".mem_side", this),
       memReqEvent([this](){ processMemReqEvent(); }, name()), 
       grantEvent([this](){ processGrantEvent(); }, name()),
-      currentGranted(-1) {}
+      currentGranted(-1) {
+        stats.transCount = 0;
+        stats.rdxCount = 0;
+        stats.rdCount = 0;
+        stats.updCount = 0;
+        stats.rdBytes = 0;
+        stats.updBytes = 0;
+      }
 
 
 void SerializingBus::generateAlignAccess(PacketPtr pkt){

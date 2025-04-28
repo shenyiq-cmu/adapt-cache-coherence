@@ -25,6 +25,11 @@ enum BusOperationType {
 
 typedef struct BUSStats{
   int transCount;
+  int rdxCount;
+  int rdCount;
+  int updCount;
+  int rdBytes;
+  int updBytes;
 } BusStats;
 
 
@@ -90,7 +95,7 @@ class SerializingBus : public SimObject {
 
     // statistics
 
-    BusStats stats = {0};
+    BusStats stats;
 
     SerializingBus(const SerializingBusParams& params);
 
