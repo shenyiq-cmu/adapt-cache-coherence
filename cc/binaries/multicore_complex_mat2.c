@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
         *global_counter = 0;
         shared_lock->lock = 0;
     } else {
-        delay(5000); // wait for init
+        delay(10000); // wait for init
     }
 
     // Synchronize
