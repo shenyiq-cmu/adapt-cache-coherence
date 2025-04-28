@@ -60,25 +60,46 @@ int main(int argc, char** argv) {
         // Try to acquire the lock
         unsigned int my_ticket = ticket_lock_acquire((ticket_lock_t*)lock);
         
-        // Critical section begins
-        
-        // Read shared counter
-        int temp = *shared_counter;
-        
-        // Small delay to increase chances of interference if lock is broken
-        for (volatile int j = 0; j < 50; j++);
-        
-        // Increment shared counter
-        *shared_counter = temp + 1;
-        
-        // Increment local count
-        local_counts[core_id]++;
-        
-        // Log activity occasionally
-        if (i % 10 == 0) {
-            printf("Core %d: Acquired lock with ticket %u, incremented to %d\n", 
-                  core_id, my_ticket, *shared_counter);
+        // --- Critical section begins ---
+
+        // First load shared counter
+        int temp1 = *shared_counter;
+        for (volatile int j = 0; j < 10; j++);
+
+        // Load shared counter again to simulate contention
+        int temp2 = *shared_counter;
+        int combined = temp1 + temp2;
+
+        // Write an intermediate value back to shared counter
+        *shared_counter = combined / 2;
+        for (volatile int j = 0; j < 10; j++);
+
+        // Update my own local count
+        local_counts[core_id] += 1;
+
+        // False sharing: touch neighbors' counters (simulating wider critical section)
+        if (core_id > 0) {
+            local_counts[core_id - 1] += 1;
         }
+        if (core_id < 3) {
+            local_counts[core_id + 1] += 1;
+        }
+
+        // More updates to shared counter
+        *shared_counter = *shared_counter + 1;
+        for (volatile int j = 0; j < 5; j++);
+        *shared_counter = *shared_counter + core_id;
+
+        // Dummy reads to shared counter to generate more load traffic
+        volatile int dummy1 = *shared_counter;
+        volatile int dummy2 = *shared_counter;
+        (void)dummy1;
+        (void)dummy2;
+
+        // False sharing: touch unrelated memory (simulate another array)
+        volatile int *false_shared_area = (volatile int*)(4096 * 8 + 256);
+        false_shared_area[core_id] += 1;
+        false_shared_area[(core_id + 1) % 4] += 1;
         
         // Critical section ends
         

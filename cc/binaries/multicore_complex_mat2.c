@@ -10,12 +10,12 @@ void delay(int cycles) {
 }
 
 // Matrix dimensions
-#define SIZE 24
-#define BLOCK_SIZE 4
+#define SIZE 16
+#define BLOCK_SIZE 2
 
 // Shared matrix
 typedef struct {
-    short data[SIZE][SIZE];
+    int data[SIZE][SIZE];
 } Matrix;
 
 // Lock structure (simple spinlock)
@@ -23,20 +23,14 @@ typedef struct {
     volatile int lock;
 } SpinLock;
 
-int test_and_set(SpinLock* lock) {
-    int old = lock->lock;
-    lock->lock = 1;
-    return old;
-}
-
 void spin_lock(SpinLock* lock) {
-    while (test_and_set(lock)) {
+    while (__sync_lock_test_and_set(&lock->lock, 1)) {
         delay(100);
     }
 }
 
 void spin_unlock(SpinLock* lock) {
-    lock->lock = 0;
+    __sync_lock_release(&lock->lock);
 }
 
 // Globals
@@ -69,101 +63,104 @@ int main(int argc, char** argv) {
     volatile int* global_counter = (volatile int*) (sync_flags + 4); // global counter
     volatile SpinLock* shared_lock = (volatile SpinLock*) (global_counter + 1); // simple lock
 
-    // Init by core 0
-    if (core_id == 0) {
-        printf("Core 0: Initializing matrices\n");
+    for(int i = 0; i < 2; i++){
+        // Init by core 0
+        if (core_id == 0) {
+            printf("Core 0: Initializing matrices\n");
 
-        matrix_init((Matrix*)A, 1);
-        matrix_init((Matrix*)B, 2);
+            matrix_init((Matrix*)A, 1);
+            matrix_init((Matrix*)B, 2);
 
-        for (int i = 0; i < SIZE; i++) {
-            for (int j = 0; j < SIZE; j++) {
-                C->data[i][j] = 0;
-                T->data[i][j] = 0;
-                R->data[i][j] = 0;
+            for (int i = 0; i < SIZE; i++) {
+                for (int j = 0; j < SIZE; j++) {
+                    C->data[i][j] = 0;
+                    T->data[i][j] = 0;
+                    R->data[i][j] = 0;
+                }
+            }
+
+            *phase = 0;
+            for (int i = 0; i < 4; i++) sync_flags[i] = 0;
+            *global_counter = 0;
+            shared_lock->lock = 0;
+        } else {
+            delay(6000); // wait for init
+        }
+
+        // Synchronize
+        sync_flags[core_id] = 1;
+        while (!(sync_flags[0] && sync_flags[1] && sync_flags[2] && sync_flags[3])) delay(100);
+
+        printf("Core %d: Matrices initialized, starting operations\n", core_id);
+
+        // Phase 1: Matrix multiplication (split rows among cores)
+        if (core_id == 0) *phase = 1;
+        while (*phase != 1) delay(100);
+
+        int row_per_core = SIZE / 4;
+        matrix_multiply_blocked((Matrix*)A, (Matrix*)B, (Matrix*)C, core_id * row_per_core, (core_id + 1) * row_per_core);
+
+        // Use global counter + lock for extra coherence
+        for (int i = 0; i < 100; i++) {
+            spin_lock((SpinLock*)shared_lock);
+            (*global_counter)++;
+            spin_unlock((SpinLock*)shared_lock);
+            delay(10);
+        }
+
+        sync_flags[core_id] = 2;
+        while (!(sync_flags[0] == 2 && sync_flags[1] == 2 && sync_flags[2] == 2 && sync_flags[3] == 2)) delay(100);
+
+        if (core_id == 0) {
+            printf("Core 0: Matrix C checksum: %d\n", matrix_checksum((Matrix*)C));
+        }
+
+        // Phase 2: Transpose
+        if (core_id == 0) *phase = 2;
+        while (*phase != 2) delay(100);
+
+        matrix_transpose((Matrix*)C, (Matrix*)T, core_id * row_per_core, (core_id + 1) * row_per_core);
+
+        // Periodically write to shared memory during transpose
+        if (core_id % 2 == 0) {
+            for (int i = 0; i < 20; i++) {
+                *global_counter += 1;
+                delay(5);
             }
         }
 
-        *phase = 0;
-        for (int i = 0; i < 4; i++) sync_flags[i] = 0;
-        *global_counter = 0;
-        shared_lock->lock = 0;
-    } else {
-        delay(10000); // wait for init
-    }
+        sync_flags[core_id] = 3;
+        while (!(sync_flags[0] == 3 && sync_flags[1] == 3 && sync_flags[2] == 3 && sync_flags[3] == 3)) delay(100);
 
-    // Synchronize
-    sync_flags[core_id] = 1;
-    while (!(sync_flags[0] && sync_flags[1] && sync_flags[2] && sync_flags[3])) delay(100);
-
-    printf("Core %d: Matrices initialized, starting operations\n", core_id);
-
-    // Phase 1: Matrix multiplication (split rows among cores)
-    if (core_id == 0) *phase = 1;
-    while (*phase != 1) delay(100);
-
-    int row_per_core = SIZE / 4;
-    matrix_multiply_blocked((Matrix*)A, (Matrix*)B, (Matrix*)C, core_id * row_per_core, (core_id + 1) * row_per_core);
-
-    // Use global counter + lock for extra coherence
-    for (int i = 0; i < 100; i++) {
-        spin_lock((SpinLock*)shared_lock);
-        (*global_counter)++;
-        spin_unlock((SpinLock*)shared_lock);
-        delay(10*core_id + 10);
-    }
-
-    sync_flags[core_id] = 2;
-    while (!(sync_flags[0] == 2 && sync_flags[1] == 2 && sync_flags[2] == 2 && sync_flags[3] == 2)) delay(100);
-
-    if (core_id == 0) {
-        printf("Core 0: Matrix C checksum: %d\n", matrix_checksum((Matrix*)C));
-    }
-
-    // Phase 2: Transpose
-    if (core_id == 0) *phase = 2;
-    while (*phase != 2) delay(100);
-
-    matrix_transpose((Matrix*)C, (Matrix*)T, core_id * row_per_core, (core_id + 1) * row_per_core);
-
-    // Periodically write to shared memory during transpose
-    if (core_id % 2 == 0) {
-        for (int i = 0; i < 20; i++) {
-            *global_counter += 1;
-            delay(5);
+        if (core_id == 0) {
+            printf("Core 0: Matrix T checksum: %d\n", matrix_checksum((Matrix*)T));
         }
+
+        // Phase 3: Matrix addition (split columns)
+        if (core_id == 0) *phase = 3;
+        while (*phase != 3) delay(100);
+
+        int col_per_core = SIZE / 4;
+        matrix_add((Matrix*)C, (Matrix*)T, (Matrix*)R, 0, SIZE, core_id * col_per_core, (core_id + 1) * col_per_core);
+
+        // Random shared writes
+        for (int i = 0; i < 50; i++) {
+            *global_counter += core_id;
+            delay(10);
+        }
+
+        sync_flags[core_id] = 4;
+        while (!(sync_flags[0] == 4 && sync_flags[1] == 4 && sync_flags[2] == 4 && sync_flags[3] == 4)) delay(100);
+
+        if (core_id == 0) {
+            printf("Core 0: Matrix R checksum: %d\n", matrix_checksum((Matrix*)R));
+            printf("Core 0: Final global counter value: %d\n", *global_counter);
+            *phase = 4;
+        }
+
+        while (*phase != 4) delay(100);
     }
 
-    sync_flags[core_id] = 3;
-    while (!(sync_flags[0] == 3 && sync_flags[1] == 3 && sync_flags[2] == 3 && sync_flags[3] == 3)) delay(100);
-
-    if (core_id == 0) {
-        printf("Core 0: Matrix T checksum: %d\n", matrix_checksum((Matrix*)T));
-    }
-
-    // Phase 3: Matrix addition (split columns)
-    if (core_id == 0) *phase = 3;
-    while (*phase != 3) delay(100);
-
-    int col_per_core = SIZE / 4;
-    matrix_add((Matrix*)C, (Matrix*)T, (Matrix*)R, 0, SIZE, core_id * col_per_core, (core_id + 1) * col_per_core);
-
-    // Random shared writes
-    for (int i = 0; i < 50; i++) {
-        *global_counter += core_id;
-        delay(10);
-    }
-
-    sync_flags[core_id] = 4;
-    while (!(sync_flags[0] == 4 && sync_flags[1] == 4 && sync_flags[2] == 4 && sync_flags[3] == 4)) delay(100);
-
-    if (core_id == 0) {
-        printf("Core 0: Matrix R checksum: %d\n", matrix_checksum((Matrix*)R));
-        printf("Core 0: Final global counter value: %d\n", *global_counter);
-        *phase = 4;
-    }
-
-    while (*phase != 4) delay(100);
 
     printf("Core %d: Test completed.\n", core_id);
     return 0;
@@ -174,8 +171,8 @@ void matrix_init(Matrix* M, int pattern) {
     for (int i = 0; i < SIZE; i++) {
         for (int j = 0; j < SIZE; j++) {
             switch (pattern) {
-                case 1:  M->data[i][j] = (short) (i + j); break;
-                case 2:  M->data[i][j] = (short) (i * j) % 10; break;
+                case 1:  M->data[i][j] = i + j; break;
+                case 2:  M->data[i][j] = (i * j) % 10; break;
                 default: M->data[i][j] = 1; break;
             }
         }
