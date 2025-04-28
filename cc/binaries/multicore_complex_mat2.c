@@ -110,7 +110,7 @@ int main(int argc, char** argv) {
         spin_lock((SpinLock*)shared_lock);
         (*global_counter)++;
         spin_unlock((SpinLock*)shared_lock);
-        delay(10);
+        delay(10*core_id + 10);
     }
 
     sync_flags[core_id] = 2;
