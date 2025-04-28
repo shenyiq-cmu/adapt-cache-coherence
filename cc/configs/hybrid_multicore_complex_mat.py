@@ -29,7 +29,7 @@ system.dragon_cache = [HybridCache(
     serializing_bus=system.serializing_bus, 
     blockOffset=4,  # 16-byte blocks
     setBit=0,       # 1 sets
-    cacheSizeBit=10, # 1KB cache
+    cacheSizeBit=11, # 1KB cache
 ) for i in range(N)]
 
 # Create the memory bus
