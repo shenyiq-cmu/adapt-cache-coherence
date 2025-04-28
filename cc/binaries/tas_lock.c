@@ -4,17 +4,29 @@
 
 volatile int *lock = (volatile int*)(4096 * 8);
 
+void delay(int cycles) {
+    for (volatile int i = 0; i < cycles; i++);
+}
+
+// Atomic test-and-set operation
+int test_and_set(volatile int *lock) {
+    int old = *lock;
+    *lock = 1;
+    return old;
+}
+
+
 // Acquire the lock - simplified version that reduces shared counter accesses
 void tas_lock_acquire() {
     // Get my ticket
-    while (__sync_lock_test_and_set(lock, 1)) {
+    while (test_and_set(lock)) {
         // spin
     }
 }
 
 // Release the lock
 void tas_lock_release() {
-    __sync_lock_release(lock);
+    *lock = 0;
 }
 
 int main(int argc, char** argv) {
@@ -25,13 +37,15 @@ int main(int argc, char** argv) {
     }
     int core_id = atoi(argv[1]);
 
+    delay(core_id * 10);
+
     if(core_id == 0) *lock = 0;
     
     tas_lock_acquire();
 
     printf("Core %d holds the lock\n", core_id);
-    
-    for(int i = 0; i < 50; i++);
+
+    delay(500);
 
     tas_lock_release();
     
