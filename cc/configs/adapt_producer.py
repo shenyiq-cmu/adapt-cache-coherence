@@ -32,7 +32,7 @@ system.dragon_cache = [AdaptCache(
     setBit=1,       # 2 sets (almost guaranteed conflicts)
     cacheSizeBit=10, # 1KB cache (extremely small)
     invalidThreshold=0, # 1KB cache (extremely small)
-    invalidationRatio=2
+    invalidationRatio=3
 ) for i in range(N)]
 
 # Create the memory bus

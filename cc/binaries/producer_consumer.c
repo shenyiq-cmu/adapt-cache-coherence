@@ -88,6 +88,7 @@ int main(int argc, char** argv) {
             if (*mode_flag == 0) {
                 printf("Core 0: Normal producer-consumer mode\n");
                 
+                // Analysis: mesi get exclusive on first write, dtagon waste updates due to big block size
                 // Fill the primary buffer with data
                 for (int i = 0; i < BUFFER_SIZE; i++) {
                     primary_buffer[i] = (char)(round * 10 + i);

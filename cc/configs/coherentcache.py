@@ -10,13 +10,13 @@ system.clk_domain.voltage_domain = VoltageDomain()
 system.mem_mode = 'timing'
 system.mem_ranges = [AddrRange('512MB')]
 
-N = 2
+N = 8
 
 system.cpu = [TimingSimpleCPU(cpu_id=i) for i in range(N)]
 
 # CCs = coherent caches
 system.serializing_bus = SerializingBus()
-system.cc = [DragonCache(cache_id=i, serializing_bus=system.serializing_bus, blockOffset=2, setBit=0, cacheSizeBit=5) for i in range(N)]
+system.cc = [HybridCache(cache_id=i, serializing_bus=system.serializing_bus, blockOffset=2, setBit=0, cacheSizeBit=5, invalidThreshold=4) for i in range(N)]
 
 system.membus = SystemXBar()
 # system.membus.snoop_filter = NULL
