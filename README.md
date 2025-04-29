@@ -48,6 +48,7 @@ mkdir workspace && cd workspace
 ```
 /afs/ece.cmu.edu/class/ece740/labs/lab3/scripts/cc_setup
 ```
+5. Clone the repo in _update_ branch which overwrite files with our versions
 
 ### Build gem5 with cache coherence protocols
 ```
