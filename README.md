@@ -27,6 +27,28 @@ This repository implements four cache coherence protocols (MESI, Dragon, Hybrid 
     └── docs/
 
 ## Building and Testing
+
+### Installation on ECE Cluster
+#### ECE Cluster Setup
+
+1. Log in to your ECE cluster machine to enter AFS
+```
+ssh AndrewID@eceXXX.ece.local.cmu.edu   # Replace XXX with your machine number (000-031)
+```
+2. Set up your workspace
+```
+cd private
+mkdir workspace && cd workspace
+```
+3. Run the setup script
+```
+/afs/ece.cmu.edu/class/ece740/labs/lab3/scripts/setup_lab3
+```
+4. Set up the additional cache coherence files
+```
+/afs/ece.cmu.edu/class/ece740/labs/lab3/scripts/cc_setup
+```
+
 ### Build gem5 with cache coherence protocols
 ```
 cd work/cc
